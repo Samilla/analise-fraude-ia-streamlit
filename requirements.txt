@@ -4,3 +4,4 @@ plotly
 langchain
 langchain-community
 google-generativeai
+langchain-google-genai
