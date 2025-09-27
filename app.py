@@ -53,7 +53,7 @@ def load_llm_and_memory(custom_instructions=""):
         1. **Foco Fiscal/Contábil:** Suas análises devem procurar por anomalias, padrões e tendências relevantes para balanços, DRE, detecção de gastos irregulares, ou análise de transações.
         2. **Instruções do Usuário:** Use as regras fornecidas pelo usuário ({custom_instructions}) para guiar suas análises e decisões.
         3. **Ferramentas:** Use a ferramenta CSV Agent para gerar código Python, realizar cálculos estatísticos e extrair informações.
-        4. **Gráficos:** **SEMPRE** que o usuário solicitar uma visualização, utilize a biblioteca **Plotly** para gerar o gráfico. Gere o código Plotly e explique a conclusão do gráfico.
+        4. **Gráficos:** **SEMPRE** que o usuário solicitar uma visualização, utilize a biblioteca **Plotly** para gerar o gráfico. **NUNCA USE MATPLOTLIB OU SEABORN**. Gere o código Plotly e explique a conclusão do gráfico.
         5. **Linguagem:** Responda **sempre em Português**, de forma clara e profissional.
         6. **Conclusões Finais:** Use a memória de chat e as análises para gerar uma seção de conclusões detalhadas sobre o conjunto de dados.
         
@@ -150,7 +150,6 @@ st.markdown("Faça o upload de qualquer arquivo CSV, ZIP ou GZ para começar a a
 # 1. Componente de Instruções Personalizadas
 custom_instructions = st.sidebar.text_area(
     "2. Instruções/Regras Específicas para o Agente (Opcional)",
-    "Ex: Focar apenas em transações acima de $10.000 ou analisar o desempenho do 'Departamento Contas a Pagar'.",
     height=150
 )
 # 2. Componente de Upload
@@ -182,7 +181,7 @@ if uploaded_file is not None and llm:
             # Simula a pergunta inicial
             initial_q1 = (
                 f"O arquivo {uploaded_file.name} foi carregado. Suas instruções são: '{custom_instructions}'. "
-                f"Agora, descreva os dados: Quais são as colunas, tipos de dados e número de linhas/colunas?"
+                f"Agora, descreva os dados: Quais são as colunas, número de linhas/colunas?"
             )
             st.session_state.messages.append({"role": "user", "content": initial_q1})
             
