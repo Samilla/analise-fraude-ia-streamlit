@@ -1,304 +1,335 @@
+# -*- coding: utf-8 -*-
+# Agente de Análise de Dados e Detecção de Fraudes com Gemini e LangChain
+# Desenvolvido para um projeto de curso de Agentes de IA.
+
 import streamlit as st
 import pandas as pd
-from langchain_google_genai import GoogleGenerativeAI
-from langchain_experimental.agents.agent_toolkits import create_csv_agent
-from langchain.memory import ConversationBufferMemory
-from langchain.chains import ConversationChain
-from langchain.prompts import PromptTemplate
-import plotly.express as px
-import plotly.io as pio # Necessário para ler o JSON do Plotly
-import tempfile
 import os
-import logging
+import tempfile
 import zipfile
 import gzip
 import io
-import json # Necessário para parsing de JSON
+import json
+from langchain_google_genai import GoogleGenerativeAI
+from langchain.agents.agent_types import AgentType
+from langchain_experimental.agents.agent_toolkits import create_csv_agent
+from langchain.schema import HumanMessage, SystemMessage
+from langchain.memory import ConversationBufferWindowMemory
 from langchain.agents import AgentExecutor
+import plotly.express as px
+import plotly.io as pio
 
-# Configuração de Logs para Debug (Útil no ambiente local)
-logging.basicConfig(level=logging.INFO)
+# --- Configurações Iniciais do Streamlit ---
+st.set_page_config(layout="wide", page_title="Multi Agente de Análise de Dados e Fraude")
 
-# --- Configuração da Página e da API Key ---
-st.set_page_config(
-    page_title="Multi Agente Analista de CSV Fiscal",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- Constantes e Variáveis Globais ---
+pio.templates.default = "plotly_white"
+MODEL_NAME = "gemini-2.5-flash"
 
-# Verifica a chave de API
-if "GEMINI_API_KEY" not in st.secrets:
-    st.error("Chave de API do Gemini não encontrada. Configure GEMINI_API_KEY no secrets.toml.")
-    st.stop()
+# Tenta obter a chave da API do Gemini do secrets.toml (Streamlit Cloud)
+try:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+except (KeyError, AttributeError):
+    # Se estiver rodando localmente sem secrets.toml, usa variável de ambiente
+    API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
-# --- Funções de Inicialização e Processamento de Arquivos ---
+if not API_KEY:
+    st.error("ERRO: Chave da API do Gemini não encontrada. Configure a chave no .streamlit/secrets.toml ou na variável de ambiente GEMINI_API_KEY.")
 
-def load_llm_and_memory(custom_instructions=""):
-    """Carrega o LLM e configura a memória de conversa com instruções personalizadas."""
-    try:
-        # Inicializa o LLM (Gemini Flash é ideal para esta tarefa)
-        llm = GoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            api_key=st.secrets["GEMINI_API_KEY"],
-            temperature=0.1
-        )
-        
-        # Configura a memória do agente
-        memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-        
-        # --- PROMPT GENERALIZADO COM FOCO FISCAL E INSTRUÇÕES DINÂMICAS ---
-        analyst_prompt = f"""
-        Você é um **Multi Agente de IA SUPER ESPECIALISTA** em Contabilidade, Big Data, Análise de Dados e Python.
-        Sua principal tarefa é realizar a **Análise Exploratória de Dados (EDA)** detalhada para fins fiscais, contábeis ou de detecção de fraudes.
+# --- Funções de Manipulação de Arquivos ---
 
-        **Siga estas regras:**
-        1. **Foco Fiscal/Contábil:** Suas análises devem procurar por anomalias, padrões e tendências relevantes para balanços, DRE, detecção de gastos irregulares, ou análise de transações.
-        2. **Instruções do Usuário:** Use as regras fornecidas pelo usuário ({custom_instructions}) para guiar suas análises e decisões.
-        3. **Ferramentas:** Use a ferramenta CSV Agent para gerar código Python, realizar cálculos estatísticos e extrair informações.
-        4. **Gráficos:** **SEMPRE** que o usuário solicitar uma visualização, utilize **Plotly**. **NUNCA USE MATPLOTLIB OU SEABORN**. Quando gerar um gráfico, o código Python da ferramenta DEVE **imprimir a representação JSON do gráfico** usando `fig.to_json()` para que o Streamlit possa renderizá-lo. Após gerar o JSON, **não inclua mais texto na resposta**.
-        5. **Linguagem:** Responda **sempre em Português**, de forma clara e profissional.
-        6. **Conclusões Finais:** Use a memória de chat e as análises para gerar uma seção de conclusões detalhadas sobre o conjunto de dados.
-        
-        Histórico da Conversa: {{chat_history}}
-        Pergunta do Usuário: {{input}}
-        Resposta:
-        """
-        # A ConversationChain é usada para a memória da sessão e o relatório final.
-        conversation = ConversationChain(
-            llm=llm,
-            memory=memory,
-            prompt=PromptTemplate(template=analyst_prompt, input_variables=["chat_history", "input"])
-        )
-
-        return llm, conversation, memory
+@st.cache_data(show_spinner="Descompactando arquivo...")
+def unzip_and_read_file(uploaded_file):
+    """
+    Descompacta arquivos ZIP ou GZ e lê o conteúdo CSV.
+    Retorna o nome temporário do arquivo e o DataFrame.
+    """
+    file_extension = uploaded_file.name.lower().split('.')[-1]
     
-    except Exception as e:
-        st.error(f"Erro ao inicializar o LLM: {e}")
-        return None, None, None
-
-def decompress_file(uploaded_file):
-    """Descompacta arquivos ZIP ou GZ e retorna o caminho para o CSV temporário."""
-    file_name = uploaded_file.name
-    file_extension = file_name.split('.')[-1].lower()
-    
-    # 1. Cria um arquivo temporário no disco para o arquivo CSV final
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp_csv:
-        tmp_csv_path = tmp_csv.name
-    
-    # 2. Processa arquivos ZIP
     if file_extension == 'zip':
-        try:
-            with zipfile.ZipFile(io.BytesIO(uploaded_file.getvalue()), 'r') as zip_ref:
-                # Procura pelo primeiro arquivo CSV dentro do ZIP
-                csv_in_zip = [f for f in zip_ref.namelist() if f.endswith('.csv')][0]
-                with zip_ref.open(csv_in_zip) as csv_file:
-                    with open(tmp_csv_path, 'wb') as f:
-                        f.write(csv_file.read())
-                st.sidebar.success(f"Arquivo ZIP descompactado. Analisando '{csv_in_zip}'.")
-                return tmp_csv_path
-        except Exception as e:
-            st.sidebar.error(f"Erro ao descompactar o arquivo ZIP: {e}")
-            return None
-    
-    # 3. Processa arquivos GZ (GZIP)
-    elif file_extension == 'gz':
-        try:
-            with gzip.open(uploaded_file, 'rb') as f_in:
-                with open(tmp_csv_path, 'wb') as f_out:
-                    f_out.write(f_in.read())
-            st.sidebar.success(f"Arquivo GZ descompactado. Analisando o conteúdo.")
-            return tmp_csv_path
-        except Exception as e:
-            st.sidebar.error(f"Erro ao descompactar o arquivo GZ: {e}")
-            return None
+        with zipfile.ZipFile(uploaded_file, 'r') as zf:
+            # Tenta encontrar o primeiro CSV dentro do ZIP
+            csv_files = [name for name in zf.namelist() if name.endswith('.csv')]
+            if not csv_files:
+                return None, None
             
-    # 4. Arquivo CSV normal (simplesmente salva para que o agente possa ler do disco)
+            # Lê o primeiro CSV encontrado
+            with zf.open(csv_files[0]) as csv_file:
+                df = pd.read_csv(csv_file)
+                # Salva o arquivo em disco temporário para o agente acessar
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
+                    df.to_csv(tmp_file.name, index=False)
+                    return tmp_file.name, df
+    
+    elif uploaded_file.name.endswith('.gz'):
+        # Lida com arquivos GZ (que podem ser CSVs gzipados)
+        try:
+            with gzip.open(uploaded_file, 'rt') as gz_file:
+                df = pd.read_csv(gz_file)
+                # Salva o arquivo em disco temporário para o agente acessar
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
+                    df.to_csv(tmp_file.name, index=False)
+                    return tmp_file.name, df
+        except Exception:
+            return None, None
+
     elif file_extension == 'csv':
-        try:
-            with open(tmp_csv_path, 'wb') as f:
-                f.write(uploaded_file.getvalue())
-            return tmp_csv_path
-        except Exception as e:
-            st.sidebar.error(f"Erro ao salvar o arquivo CSV: {e}")
-            return None
+        # Arquivo CSV normal
+        df = pd.read_csv(uploaded_file)
+        # Salva o arquivo em disco temporário para o agente acessar
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
+            uploaded_file.seek(0)
+            tmp_file.write(uploaded_file.read())
+            return tmp_file.name, df
     
-    else:
-        st.sidebar.error("Formato de arquivo não suportado. Use CSV, ZIP ou GZ.")
-        return None
+    return None, None
 
-def create_data_agent(_llm, _csv_path):
-    """Cria o agente CSV usando o caminho do arquivo."""
+# --- Funções do Agente ---
+
+def load_llm_and_memory(temp_csv_path):
+    """
+    Cria e carrega a memória e o agente de IA com o prompt de especialista.
+    """
+    # 1. Prompt do Especialista (Regras Rígidas)
+    analyst_prompt = f"""
+    Você é um Multi Agente de IA SUPER ESPECIALISTA em Contabilidade, Análise de Dados e Desenvolvimento Python.
+    Sua missão é atuar como um Analista de Dados e Fraudes, capaz de analisar qualquer arquivo CSV fiscal, contábil ou operacional fornecido pelo usuário.
+
+    **Você DEVE seguir estas regras estritamente:**
+    1. **Personalidade:** Seja objetivo, técnico e focado em fornecer insights e código Python (quando solicitado).
+    2. **Foco:** Use as colunas e dados do arquivo CSV fornecido, que está em '{temp_csv_path}', para responder a todas as perguntas.
+    3. **Memória:** Lembre-se do histórico da conversa para manter o contexto e as conclusões.
+    4. **Gráficos:** **SEMPRE** que o usuário solicitar uma visualização, utilize a biblioteca **Plotly**.
+       **Atenção:** **NUNCA USE MATPLOTLIB OU SEABORN.**
+       O seu output final para gráficos **DEVE** ser uma string JSON válida do Plotly (`fig.to_json()`) para que o Streamlit possa renderizar a imagem.
+    5. **Saída Final:** O resultado final de sua análise deve ser claro e conciso.
+
+    **Instruções Específicas do Usuário:** O usuário forneceu instruções específicas no sidebar que você deve integrar à sua análise: "{st.session_state.user_instructions}"
+    """
+
+    # 2. Configuração do Modelo e Agente
     try:
-        return create_csv_agent(
-            _llm, 
-            _csv_path, 
-            verbose=True, 
-            agent_type="zero-shot-react-description", # Tipo de agente mais robusto para Gemini
-            allow_dangerous_code=True,
-            handle_parsing_errors=True 
-        )
+        llm = GoogleGenerativeAI(model=MODEL_NAME, google_api_key=API_KEY)
     except Exception as e:
-        st.error(f"Erro ao inicializar o agente de IA: {e}")
-        return None
+        st.error(f"Erro ao carregar o modelo Gemini: {e}")
+        return None, None
 
-# --- Interface e Execução ---
+    memory = ConversationBufferWindowMemory(
+        memory_key="chat_history",
+        input_key="input",
+        return_messages=True,
+        k=5, # Mantém as últimas 5 interações na memória
+        ai_prefix="Analista"
+    )
 
-st.title("🛡️ Multi Agente Analista de CSV Fiscal")
-st.markdown("Faça o upload de qualquer arquivo CSV, ZIP ou GZ para começar a análise fiscal e contábil. Defina regras personalizadas na barra lateral.")
-
-
-# --- BARRA LATERAL (Sidebar) ---
-st.sidebar.header("Configuração do Analista")
-
-# 1. Componente de Upload
-uploaded_file = st.sidebar.file_uploader(
-    "1. Faça o Upload do Arquivo (CSV, ZIP ou GZ)", 
-    type=["csv", "zip", "gz"]
-)
-
-# 2. Componente de Instruções Personalizadas
-custom_instructions = st.sidebar.text_area(
-    "2. Instruções/Regras Específicas para o Agente",
-    "Ex: Focar apenas em transações acima de R$10.000 ou analisar o desempenho do 'Departamento Contas a Pagar'.",
-    height=150
-)
-
-# Inicializa o LLM e a Memória com as instruções personalizadas
-llm, conversation_chain, memory = load_llm_and_memory(custom_instructions)
-
-data_agent_executor = None
-
-if uploaded_file is not None and llm:
-    # Processa e descompacta o arquivo se necessário
-    tmp_file_path = decompress_file(uploaded_file)
-
-    if tmp_file_path:
-        # 3. Cria o agente com o caminho temporário
-        data_agent_executor = create_data_agent(llm, tmp_file_path)
-
-        # Armazena o agente na sessão
-        if 'data_agent' not in st.session_state or st.session_state.current_file != uploaded_file.name:
-            st.session_state.data_agent = data_agent_executor
-            st.session_state.current_file = uploaded_file.name
-            st.session_state.messages = [] # Limpa o chat para o novo arquivo
-            st.sidebar.success(f"Arquivo '{uploaded_file.name}' carregado e agente inicializado!")
-
-            # Simula a pergunta inicial (O Agente precisa começar com uma tarefa para evitar o erro de parsing)
-            initial_q1 = (
-                f"O arquivo {uploaded_file.name} foi carregado. Suas instruções são: '{custom_instructions}'. "
-                f"Agora, descreva os dados: Quais são as colunas, tipos de dados e número de linhas/colunas?"
-            )
-            st.session_state.messages.append({"role": "user", "content": initial_q1})
-            
-            with st.spinner(f"Agente pensando em: {initial_q1[:50]}..."):
-                try:
-                    # O agente executa a análise inicial
-                    # Usamos o método .run() que é mais adequado para a primeira pergunta do zero-shot-react-description
-                    response = st.session_state.data_agent.run(initial_q1)
-                except Exception as e:
-                    # Tratamento de erro robusto para a inicialização
-                    response = (
-                        f"O agente inicializou, mas encontrou um erro ao tentar a primeira análise. "
-                        f"Tente perguntar novamente ou faça uma pergunta mais simples. Detalhes: {e}"
-                    )
-                    st.error(response)
-                    
-            st.session_state.messages.append({"role": "assistant", "content": response})
-
-            # Mostra o cabeçalho do arquivo
-            try:
-                df_preview = pd.read_csv(tmp_file_path, low_memory=False)
-                st.subheader(f"Pré-visualização do Arquivo: {uploaded_file.name}")
-                st.dataframe(df_preview.head())
-            except Exception as e:
-                 st.warning(f"Não foi possível exibir a pré-visualização do arquivo. Detalhes: {e}")
-            
-            # Remove o arquivo temporário
-            os.remove(tmp_file_path)
-            
-# --- Bloco de Geração de Relatório e Chat ---
-
-if 'data_agent' in st.session_state and st.session_state.data_agent:
-    st.markdown("---")
+    # Cria o agente CSV
+    # Usando zero-shot-react-description para melhor compatibilidade com o Gemini
+    agent = create_csv_agent(
+        llm=llm,
+        path=temp_csv_path,
+        verbose=True,
+        agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, 
+        extra_tools=None,
+        prefix=analyst_prompt,
+        memory=memory,
+        handle_parsing_errors=True # Permite que o agente tente se corrigir
+    )
     
-    # 3. Botão de Geração de Relatório na Barra Lateral
-    if st.sidebar.button("📝 Gerar Relatório Completo", type="primary"):
-        # Prompt usa a memória da ConversationChain para resumir a sessão
-        report_prompt = (
-            "Gere um relatório completo e estruturado em Markdown, com base em todas as análises realizadas até agora "
-            "nesta sessão de chat. Inclua uma Introdução (mencionando o arquivo analisado e as instruções do usuário), "
-            "Análise Estatística (com base nas perguntas feitas e respostas), e uma Conclusão final sobre os dados. "
-            "NÃO use a ferramenta CSV Agent para isso, apenas resuma o histórico do chat."
-        )
-        with st.spinner("Gerando relatório final e estruturado..."):
-            try:
-                # O ConversationChain usa o histórico (chat_history)
-                final_report = conversation_chain.run(report_prompt)
-                st.session_state['final_report_content'] = final_report
-                st.sidebar.success("Relatório gerado com sucesso! Baixe abaixo.")
-            except Exception as e:
-                st.sidebar.error(f"Erro ao gerar o relatório: {e}")
+    return memory, agent
 
-    # 4. Download button para o relatório gerado na Barra Lateral
-    if 'final_report_content' in st.session_state:
-        st.sidebar.download_button(
-            label="⬇️ Baixar Relatório em Markdown",
-            data=st.session_state['final_report_content'],
-            file_name=f"Relatorio_{st.session_state.current_file.replace('.csv', '').replace('.', '')}.md",
-            mime="text/markdown"
-        )
-        st.markdown("---")
-
-
-    # --- Exibição do Histórico do Chat ---
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            content = message["content"]
-            
-            # Tenta analisar se o conteúdo é um JSON de gráfico Plotly
-            is_plotly_json = False
-            try:
-                # Remove qualquer ruído (como 'Final Answer: ' que o agente pode adicionar)
-                clean_content = content.strip().replace("Final Answer:", "").strip()
-                
-                # Tenta carregar o conteúdo como JSON
-                fig_json = json.loads(clean_content)
-                
-                # Verifica se é um objeto Plotly válido
-                if 'data' in fig_json and 'layout' in fig_json:
-                    fig = pio.from_json(clean_content)
-                    st.plotly_chart(fig, use_container_width=True)
-                    is_plotly_json = True
-                
-            except (json.JSONDecodeError, ValueError, KeyError):
-                # Não é um JSON de gráfico Plotly, então continua
-                pass
-
-            if not is_plotly_json:
-                st.markdown(content)
-    
-    # --- Entrada do Usuário (Bloco de Chat) ---
-    if prompt := st.chat_input("Faça sua pergunta ao Agente Analista (Ex: Calcule a média da coluna 'Valor' e gere um histograma dela):"):
-        st.session_state.messages.append({"role": "user", "content": prompt})
+def parse_and_display_response(response_text):
+    """
+    Analisa a resposta do agente, procurando por JSON do Plotly.
+    Se encontrar, renderiza o gráfico; caso contrário, exibe como texto.
+    """
+    try:
+        # Padrão para tentar extrair um JSON Plotly
+        # O agente deve retornar o JSON como uma string, muitas vezes entre aspas ou chaves
+        start_index = response_text.find('{')
+        end_index = response_text.rfind('}')
         
-        with st.chat_message("user"):
-            st.markdown(prompt)
+        if start_index != -1 and end_index != -1 and end_index > start_index:
+            json_str = response_text[start_index:end_index + 1]
+            # Tenta carregar o JSON e renderizar o gráfico
+            fig_dict = json.loads(json_str)
+            fig = pio.from_json(json.dumps(fig_dict))
+            
+            # Renderiza o gráfico e exibe a mensagem de sucesso
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Remove o JSON da resposta para exibir apenas o texto explicativo
+            text_response = response_text[:start_index].strip()
+            if not text_response:
+                text_response = "Gráfico gerado com sucesso. Analise a visualização acima."
+                
+            return text_response
+    
+    except Exception as e:
+        # Se falhar ao processar o JSON, assume que é apenas texto
+        pass
 
-        with st.chat_message("assistant"):
-            with st.spinner("Agente de IA está analisando os dados..."):
+    # Se não for JSON Plotly, retorna a resposta como está
+    return response_text
+
+# --- Layout e Interface ---
+
+st.title("🤖 Multi Agente de Análise Fiscal e de Fraudes")
+st.markdown("---")
+
+# Inicialização de estado para memória e agente
+if 'data_agent' not in st.session_state:
+    st.session_state.data_agent = None
+if 'memory' not in st.session_state:
+    st.session_state.memory = None
+if 'chat_history_list' not in st.session_state:
+    st.session_state.chat_history_list = []
+if 'report_content' not in st.session_state:
+    st.session_state.report_content = ""
+if 'user_instructions' not in st.session_state:
+    st.session_state.user_instructions = "Nenhuma instrução específica fornecida."
+
+# --- Barra Lateral (Configurações e Upload) ---
+
+with st.sidebar:
+    st.header("⚙️ Configurações de Análise")
+    
+    # 1. Upload de Arquivo
+    uploaded_file = st.file_uploader(
+        "Carregue seu arquivo CSV, ZIP ou GZ:",
+        type=['csv', 'zip', 'gz'],
+        key="file_uploader"
+    )
+    
+    # 2. Instruções Personalizadas
+    st.subheader("Instruções de Análise")
+    instructions = st.text_area(
+        "Instruções e Foco do Agente (Ex: Focar em contas de alto risco):",
+        height=150,
+        placeholder="Nenhuma instrução específica. (O agente fará uma análise geral)",
+        key="user_instructions_input"
+    )
+    st.session_state.user_instructions = instructions if instructions else "Nenhuma instrução específica fornecida."
+    
+    # 3. Botão de Relatório Completo
+    st.subheader("Relatório Final")
+    report_btn = st.button("📝 Gerar Relatório Completo", use_container_width=True)
+    
+    # 4. Botão de Download (Depende do conteúdo do relatório)
+    if st.session_state.report_content:
+        st.download_button(
+            label="⬇️ Baixar Relatório (Markdown)",
+            data=st.session_state.report_content,
+            file_name="relatorio_analise_ia.md",
+            mime="text/markdown",
+            use_container_width=True
+        )
+
+# --- Processamento do Arquivo ---
+
+if uploaded_file and st.session_state.data_agent is None:
+    temp_csv_path, df = unzip_and_read_file(uploaded_file)
+    
+    if temp_csv_path and df is not None:
+        try:
+            # Inicializa o agente
+            st.session_state.memory, st.session_state.data_agent = load_llm_and_memory(temp_csv_path)
+            
+            # Adiciona mensagem de sucesso
+            st.success(f"Arquivo '{uploaded_file.name}' carregado e agente inicializado!")
+            
+            # Pergunta inicial para auto-descrição do arquivo
+            initial_q1 = f"Descreva os dados: Quais são as colunas, tipos de dados e o formato geral do arquivo? {df.shape[0]} linhas e {df.shape[1]} colunas."
+            
+            # Executa a primeira análise para preencher o chat
+            with st.spinner(f"Agente analisando o arquivo..."):
                 try:
-                    # Envia a pergunta para o agente de dados
-                    # O método .run() é usado aqui para o agente de dados
-                    response = st.session_state.data_agent.run(prompt)
-                    st.session_state.messages.append({"role": "assistant", "content": response})
+                    # Executa a pergunta inicial e armazena a resposta
+                    response_obj = st.session_state.data_agent.run(initial_q1)
+                    initial_response = parse_and_display_response(response_obj)
+                    
+                    st.session_state.chat_history_list.append(("user", initial_q1))
+                    st.session_state.chat_history_list.append(("agent", initial_response))
                     
                 except Exception as e:
-                    # Este bloco de exceção captura e exibe erros, permitindo que o app continue
-                    error_message = (
-                        f"O Agente encontrou um erro ao processar sua requisição. Por favor, tente reformular a pergunta "
-                        f"ou verificar se o arquivo CSV está bem formatado. Detalhes: {e}"
-                    )
-                    st.error(error_message)
-                    st.session_state.messages.append({"role": "assistant", "content": error_message})
-else:
-    st.info("Por favor, faça o upload de um arquivo CSV, ZIP ou GZ para começar a análise.")
+                    # Lida com erros de parsing logo na primeira pergunta
+                    st.session_state.chat_history_list.append(("user", initial_q1))
+                    st.session_state.chat_history_list.append(("agent", f"O Agente inicializou, mas encontrou um erro ao tentar a primeira análise. O problema de 'Output Parsing' pode ocorrer. Por favor, faça uma pergunta simples como 'Quais colunas existem?' para testar o agente."))
+                    print(f"Erro no primeiro parsing: {e}")
+                    
+        except Exception as e:
+            st.error(f"Erro ao inicializar o agente de IA: {e}")
+    
+    elif uploaded_file:
+        st.error("Formato de arquivo não suportado ou erro ao descompactar. Certifique-se de que é um CSV válido, ZIP ou GZ.")
+
+# --- Processamento do Relatório ---
+
+if report_btn and st.session_state.data_agent:
+    # Pergunta que força o agente a gerar um relatório completo
+    report_prompt = """
+    Gere um relatório completo da análise de dados realizada até agora, incorporando as seguintes seções em Markdown formatado:
+    1. **Resumo Executivo (Conclusão do Agente):** Quais são as principais conclusões encontradas e padrões/anomalias mais importantes?
+    2. **Descrição dos Dados:** Detalhes de colunas, tipos de dados, e medidas centrais/dispersão.
+    3. **Relações e Tendências:** Quais foram as correlações mais fortes e tendências identificadas.
+    4. **Sugestões:** Recomendações finais baseadas na análise (Ex: colunas a investigar para fraude).
+
+    Sua resposta deve ser SOMENTE o conteúdo do relatório em Markdown.
+    """
+    
+    with st.spinner("Gerando relatório completo... Isso pode levar alguns momentos."):
+        try:
+            # Roda o agente com o prompt de relatório
+            report_response = st.session_state.data_agent.run(report_prompt)
+            
+            st.session_state.report_content = report_response
+            st.success("Relatório gerado com sucesso! Use o botão 'Baixar Relatório (Markdown)' na lateral.")
+            
+        except Exception as e:
+            st.error(f"Erro ao gerar o relatório: {e}")
+
+# --- Interface de Chat ---
+
+# Exibe o histórico de chat
+for role, message in st.session_state.chat_history_list:
+    if role == "user":
+        st.chat_message("user").markdown(message)
+    else:
+        # Usa o parser para renderizar a mensagem do agente (incluindo gráficos)
+        parsed_message = parse_and_display_response(message)
+        st.chat_message("assistant").markdown(parsed_message)
+
+# Campo de entrada de prompt do usuário
+if st.session_state.data_agent:
+    if prompt := st.chat_input("Faça sua pergunta ao Agente... (Ex: Qual a correlação entre Amount e Time?)"):
+        st.session_state.chat_history_list.append(("user", prompt))
+        st.chat_message("user").markdown(prompt)
+
+        with st.spinner("Agente de IA está processando..."):
+            try:
+                # Executa a pergunta e armazena a resposta
+                # Usando .run() para maior simplicidade de saída, mas com parsing robusto
+                response_obj = st.session_state.data_agent.run(prompt)
+                
+                # Garante que a resposta completa seja armazenada para análise e memória
+                parsed_response = parse_and_display_response(response_obj)
+                
+                # Adiciona a resposta ao histórico
+                st.session_state.chat_history_list.append(("agent", response_obj))
+                
+                # Exibe a resposta final (se não for um gráfico, será exibido como texto)
+                st.chat_message("assistant").markdown(parsed_response)
+
+            except Exception as e:
+                # Tratamento robusto de erro para evitar quebras do aplicativo
+                st.session_state.chat_history_list.append(("agent", "O Agente encontrou um erro ao processar sua requisição. Por favor, tente reformular a pergunta ou verificar se o arquivo CSV está bem formatado. Detalhes: An output parsing error occurred. Tente reiniciar o aplicativo se o erro persistir."))
+                print(f"Erro na execução do agente (run): {e}")
+                st.experimental_rerun() # Reinicia para limpar o estado em caso de erro grave
+
+# Footer para indicar o estado
+if st.session_state.data_agent is None:
+    st.info("⚠️ Carregue um arquivo CSV, ZIP ou GZ para iniciar a análise.")
+
+# Limpa o arquivo temporário ao finalizar o Streamlit
+if 'temp_csv_path' in locals() and os.path.exists(temp_csv_path):
+    os.remove(temp_csv_path)
+
