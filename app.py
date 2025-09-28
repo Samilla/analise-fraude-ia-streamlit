@@ -10,11 +10,11 @@ import zipfile
 import gzip
 import io
 import json
-from langchain_google_genai import ChatGoogleGenerativeAI # ALTERADO: Usando o modelo Chat para maior estabilidade do agente
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents.agent_types import AgentType
 from langchain_experimental.agents.agent_toolkits import create_csv_agent
 from langchain.schema import HumanMessage, SystemMessage
-from langchain.memory import ConversationBufferWindowMemory
+from langchain.memory import ConversationBufferMemory # CORRIGIDO: Usando a classe de memória base não descontinuada
 from langchain.agents import AgentExecutor
 import plotly.express as px
 import plotly.io as pio
@@ -109,19 +109,17 @@ def load_llm_and_memory(temp_csv_path):
 
     # 2. Configuração do Modelo e Agente
     try:
-        # ALTERADO: Uso de ChatGoogleGenerativeAI (mais estável para agentes)
+        # Uso de ChatGoogleGenerativeAI (mais estável para agentes)
         llm = ChatGoogleGenerativeAI(model=MODEL_NAME, google_api_key=API_KEY)
     except Exception as e:
         st.error(f"Erro ao carregar o modelo Gemini. Verifique a chave da API: {e}")
         return None, None 
     
-    # NOTE: A memória ConversationBufferWindowMemory foi mantida, mas não será mais passada
-    # diretamente para o create_csv_agent, para evitar o UserWarning e o erro.
-    memory = ConversationBufferWindowMemory(
+    # CORRIGIDO: Usando ConversationBufferMemory para evitar o aviso de depreciação
+    memory = ConversationBufferMemory(
         memory_key="chat_history",
         input_key="input",
         return_messages=True,
-        k=5, # Mantém as últimas 5 interações na memória
         ai_prefix="Analista"
     )
 
@@ -134,8 +132,7 @@ def load_llm_and_memory(temp_csv_path):
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, 
             extra_tools=None,
             prefix=analyst_prompt,
-            # memory=memory, # REMOVIDO: Argumento obsoleto que causa o UserWarning/NoneType
-            # handle_parsing_errors=True, # REMOVIDO: Argumento obsoleto que causa o UserWarning/NoneType
+            # memory e handle_parsing_errors foram removidos na correção anterior
             allow_dangerous_code=True
         )
         return memory, agent
