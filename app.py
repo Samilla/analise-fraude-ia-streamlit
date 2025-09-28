@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini e LangChain
 # Desenvolvido para um projeto de curso de Agentes de IA.
 
@@ -114,6 +115,8 @@ def load_llm_and_memory(temp_csv_path):
         st.error(f"Erro ao carregar o modelo Gemini. Verifique a chave da API: {e}")
         return None, None 
     
+    # NOTE: A memória ConversationBufferWindowMemory foi mantida, mas não será mais passada
+    # diretamente para o create_csv_agent, para evitar o UserWarning e o erro.
     memory = ConversationBufferWindowMemory(
         memory_key="chat_history",
         input_key="input",
@@ -131,13 +134,13 @@ def load_llm_and_memory(temp_csv_path):
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, 
             extra_tools=None,
             prefix=analyst_prompt,
-            memory=memory,
-            handle_parsing_errors=True, 
+            # memory=memory, # REMOVIDO: Argumento obsoleto que causa o UserWarning/NoneType
+            # handle_parsing_errors=True, # REMOVIDO: Argumento obsoleto que causa o UserWarning/NoneType
             allow_dangerous_code=True
         )
         return memory, agent
     except Exception as e:
-        # ADICIONADO: Log de debug para capturar a causa raiz do erro NoneType
+        # Log de debug para capturar a causa raiz do erro NoneType
         print(f"DEBUG: ERRO REAL AO CRIAR AGENTE CSV: {e}")
         st.error(f"Erro ao criar o agente CSV. Verifique as dependências e o LLM. Detalhes: {e}")
         return None, None # Garante que retorna uma tupla em caso de falha
@@ -340,4 +343,3 @@ if st.session_state.data_agent is None:
 # Limpa o arquivo temporário ao finalizar o Streamlit
 if 'temp_csv_path' in locals() and os.path.exists(temp_csv_path):
     os.remove(temp_csv_path)
-
