@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini e LangChain
 # Desenvolvido para um projeto de curso de Agentes de IA.
 
@@ -10,7 +9,7 @@ import zipfile
 import gzip
 import io
 import json
-from langchain_google_genai import GoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI # ALTERADO: Usando o modelo Chat para maior estabilidade do agente
 from langchain.agents.agent_types import AgentType
 from langchain_experimental.agents.agent_toolkits import create_csv_agent
 from langchain.schema import HumanMessage, SystemMessage
@@ -109,10 +108,11 @@ def load_llm_and_memory(temp_csv_path):
 
     # 2. Configuração do Modelo e Agente
     try:
-        llm = GoogleGenerativeAI(model=MODEL_NAME, google_api_key=API_KEY)
+        # ALTERADO: Uso de ChatGoogleGenerativeAI (mais estável para agentes)
+        llm = ChatGoogleGenerativeAI(model=MODEL_NAME, google_api_key=API_KEY)
     except Exception as e:
         st.error(f"Erro ao carregar o modelo Gemini. Verifique a chave da API: {e}")
-        return None, None # Garante que retorna uma tupla
+        return None, None 
     
     memory = ConversationBufferWindowMemory(
         memory_key="chat_history",
@@ -132,11 +132,13 @@ def load_llm_and_memory(temp_csv_path):
             extra_tools=None,
             prefix=analyst_prompt,
             memory=memory,
-            handle_parsing_errors=True, # Permite que o agente tente se corrigir
-            allow_dangerous_code=True # Permissão de segurança necessária para executar o código Python
+            handle_parsing_errors=True, 
+            allow_dangerous_code=True
         )
         return memory, agent
     except Exception as e:
+        # ADICIONADO: Log de debug para capturar a causa raiz do erro NoneType
+        print(f"DEBUG: ERRO REAL AO CRIAR AGENTE CSV: {e}")
         st.error(f"Erro ao criar o agente CSV. Verifique as dependências e o LLM. Detalhes: {e}")
         return None, None # Garante que retorna uma tupla em caso de falha
 
@@ -338,3 +340,4 @@ if st.session_state.data_agent is None:
 # Limpa o arquivo temporário ao finalizar o Streamlit
 if 'temp_csv_path' in locals() and os.path.exists(temp_csv_path):
     os.remove(temp_csv_path)
+
