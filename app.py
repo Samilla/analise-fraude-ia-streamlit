@@ -111,9 +111,9 @@ def load_llm_and_memory(temp_csv_path):
     try:
         llm = GoogleGenerativeAI(model=MODEL_NAME, google_api_key=API_KEY)
     except Exception as e:
-        st.error(f"Erro ao carregar o modelo Gemini: {e}")
-        return None, None
-
+        st.error(f"Erro ao carregar o modelo Gemini. Verifique a chave da API: {e}")
+        return None, None # Garante que retorna uma tupla
+    
     memory = ConversationBufferWindowMemory(
         memory_key="chat_history",
         input_key="input",
@@ -122,21 +122,23 @@ def load_llm_and_memory(temp_csv_path):
         ai_prefix="Analista"
     )
 
-    # Cria o agente CSV
-    # Corrigido: allow_dangerous_code=True é necessário para permitir a execução de código Python (repl)
-    agent = create_csv_agent(
-        llm=llm,
-        path=temp_csv_path,
-        verbose=True,
-        agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, 
-        extra_tools=None,
-        prefix=analyst_prompt,
-        memory=memory,
-        handle_parsing_errors=True, # Permite que o agente tente se corrigir
-        allow_dangerous_code=True # Permissão de segurança necessária para executar o código Python
-    )
-    
-    return memory, agent
+    # 3. Criação do Agente (Bloco de segurança para garantir a tupla de retorno)
+    try:
+        agent = create_csv_agent(
+            llm=llm,
+            path=temp_csv_path,
+            verbose=True,
+            agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, 
+            extra_tools=None,
+            prefix=analyst_prompt,
+            memory=memory,
+            handle_parsing_errors=True, # Permite que o agente tente se corrigir
+            allow_dangerous_code=True # Permissão de segurança necessária para executar o código Python
+        )
+        return memory, agent
+    except Exception as e:
+        st.error(f"Erro ao criar o agente CSV. Verifique as dependências e o LLM. Detalhes: {e}")
+        return None, None # Garante que retorna uma tupla em caso de falha
 
 def parse_and_display_response(response_text):
     """
@@ -236,29 +238,32 @@ if uploaded_file and st.session_state.data_agent is None:
             st.session_state.memory, st.session_state.data_agent = load_llm_and_memory(temp_csv_path)
             
             # Adiciona mensagem de sucesso
-            st.success(f"Arquivo '{uploaded_file.name}' carregado e agente inicializado!")
-            
-            # Pergunta inicial para auto-descrição do arquivo
-            initial_q1 = f"Descreva os dados: Quais são as colunas, tipos de dados e o formato geral do arquivo? {df.shape[0]} linhas e {df.shape[1]} colunas."
-            
-            # Executa a primeira análise para preencher o chat
-            with st.spinner(f"Agente analisando o arquivo..."):
-                try:
-                    # Executa a pergunta inicial e armazena a resposta
-                    response_obj = st.session_state.data_agent.run(initial_q1)
-                    initial_response = parse_and_display_response(response_obj)
-                    
-                    st.session_state.chat_history_list.append(("user", initial_q1))
-                    st.session_state.chat_history_list.append(("agent", initial_response))
-                    
-                except Exception as e:
-                    # Lida com erros de parsing logo na primeira pergunta
-                    st.session_state.chat_history_list.append(("user", initial_q1))
-                    st.session_state.chat_history_list.append(("agent", f"O Agente inicializou, mas encontrou um erro ao tentar a primeira análise. O problema de 'Output Parsing' pode ocorrer. Por favor, faça uma pergunta simples como 'Quais colunas existem?' para testar o agente."))
-                    print(f"Erro no primeiro parsing: {e}")
+            if st.session_state.data_agent is not None:
+                st.success(f"Arquivo '{uploaded_file.name}' carregado e agente inicializado!")
+                
+                # Pergunta inicial para auto-descrição do arquivo
+                initial_q1 = f"Descreva os dados: Quais são as colunas, tipos de dados e o formato geral do arquivo? {df.shape[0]} linhas e {df.shape[1]} colunas."
+                
+                # Executa a primeira análise para preencher o chat
+                with st.spinner(f"Agente analisando o arquivo..."):
+                    try:
+                        # Executa a pergunta inicial e armazena a resposta
+                        response_obj = st.session_state.data_agent.run(initial_q1)
+                        initial_response = parse_and_display_response(response_obj)
+                        
+                        st.session_state.chat_history_list.append(("user", initial_q1))
+                        st.session_state.chat_history_list.append(("agent", initial_response))
+                        
+                    except Exception as e:
+                        # Lida com erros de parsing logo na primeira pergunta
+                        st.session_state.chat_history_list.append(("user", initial_q1))
+                        st.session_state.chat_history_list.append(("agent", f"O Agente inicializou, mas encontrou um erro ao tentar a primeira análise. O problema de 'Output Parsing' pode ocorrer. Por favor, faça uma pergunta simples como 'Quais colunas existem?' para testar o agente."))
+                        print(f"Erro no primeiro parsing: {e}")
+            else:
+                st.error("Falha ao inicializar o agente. Verifique a chave da API e as mensagens de erro na lateral.")
                     
         except Exception as e:
-            st.error(f"Erro ao inicializar o agente de IA: {e}")
+            st.error(f"Erro grave ao processar o arquivo: {e}")
     
     elif uploaded_file:
         st.error("Formato de arquivo não suportado ou erro ao descompactar. Certifique-se de que é um CSV válido, ZIP ou GZ.")
