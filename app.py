@@ -123,7 +123,7 @@ def load_llm_and_memory(temp_csv_path):
     )
 
     # Cria o agente CSV
-    # Usando zero-shot-react-description para melhor compatibilidade com o Gemini
+    # Corrigido: allow_dangerous_code=True é necessário para permitir a execução de código Python (repl)
     agent = create_csv_agent(
         llm=llm,
         path=temp_csv_path,
@@ -132,7 +132,8 @@ def load_llm_and_memory(temp_csv_path):
         extra_tools=None,
         prefix=analyst_prompt,
         memory=memory,
-        handle_parsing_errors=True # Permite que o agente tente se corrigir
+        handle_parsing_errors=True, # Permite que o agente tente se corrigir
+        allow_dangerous_code=True # Permissão de segurança necessária para executar o código Python
     )
     
     return memory, agent
@@ -332,4 +333,3 @@ if st.session_state.data_agent is None:
 # Limpa o arquivo temporário ao finalizar o Streamlit
 if 'temp_csv_path' in locals() and os.path.exists(temp_csv_path):
     os.remove(temp_csv_path)
-
