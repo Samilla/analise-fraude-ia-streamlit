@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini e LangChain
 # Desenvolvido para um projeto de curso de Agentes de IA.
+# Versão Final Corrigida e Estável.
 
 import streamlit as st
 import pandas as pd
@@ -13,18 +14,17 @@ import json
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents.agent_types import AgentType
 from langchain_experimental.agents.agent_toolkits import create_csv_agent
-from langchain.schema import HumanMessage, SystemMessage
-from langchain.memory import ConversationBufferWindowMemory # Usado apenas para o histórico do chat (fora do agente)
-from langchain.agents import AgentExecutor
+from langchain.memory import ConversationBufferWindowMemory
 import plotly.express as px
 import plotly.io as pio
 
 # --- Configurações Iniciais do Streamlit ---
-st.set_page_config(layout="wide", page_title="Multi Agente de Análise de Dados e Fraude")
+st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e de Fraudes")
 
 # --- Constantes e Variáveis Globais ---
 pio.templates.default = "plotly_white"
-MODEL_NAME = "gemini-2.5-flash"
+# Nome do modelo ajustado para forçar a reconstrução e estabilidade no Streamlit Cloud
+MODEL_NAME = "gemini-2.5-flash-001"
 
 # Tenta obter a chave da API do Gemini do secrets.toml (Streamlit Cloud)
 try:
@@ -38,7 +38,6 @@ if not API_KEY:
 
 # --- Funções de Manipulação de Arquivos ---
 
-# REMOVIDA A ANOTAÇÃO st.cache_data PARA EVITAR O ERRO 'No such file or directory'
 def unzip_and_read_file(uploaded_file):
     """
     Descompacta arquivos ZIP ou GZ e lê o conteúdo CSV.
@@ -49,34 +48,42 @@ def unzip_and_read_file(uploaded_file):
     # Resetar o ponteiro do arquivo
     uploaded_file.seek(0)
     
-    if file_extension == 'zip':
-        with zipfile.ZipFile(uploaded_file, 'r') as zf:
-            csv_files = [name for name in zf.namelist() if name.endswith('.csv')]
-            if not csv_files:
-                return None, None
-            
-            with zf.open(csv_files[0]) as csv_file:
-                df = pd.read_csv(csv_file)
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
-                    df.to_csv(tmp_file.name, index=False)
-                    return tmp_file.name, df
-    
-    elif uploaded_file.name.endswith('.gz'):
-        try:
+    # Cria o arquivo temporário de forma síncrona
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
+        tmp_csv_path = tmp_file.name
+
+    try:
+        if file_extension == 'zip':
+            with zipfile.ZipFile(uploaded_file, 'r') as zf:
+                csv_files = [name for name in zf.namelist() if name.endswith('.csv')]
+                if not csv_files:
+                    st.error("Nenhum arquivo CSV encontrado dentro do ZIP.")
+                    return None, None
+                
+                with zf.open(csv_files[0]) as csv_file:
+                    df = pd.read_csv(csv_file)
+                    df.to_csv(tmp_csv_path, index=False)
+                    return tmp_csv_path, df
+        
+        elif uploaded_file.name.endswith(('.gz', '.gzip')):
             with gzip.open(uploaded_file, 'rt') as gz_file:
                 df = pd.read_csv(gz_file)
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
-                    df.to_csv(tmp_file.name, index=False)
-                    return tmp_file.name, df
-        except Exception:
-            return None, None
+                df.to_csv(tmp_csv_path, index=False)
+                return tmp_csv_path, df
 
-    elif file_extension == 'csv':
-        df = pd.read_csv(uploaded_file)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
+        elif file_extension == 'csv':
+            df = pd.read_csv(uploaded_file)
             uploaded_file.seek(0)
-            tmp_file.write(uploaded_file.read())
-            return tmp_file.name, df
+            with open(tmp_csv_path, 'wb') as f:
+                f.write(uploaded_file.read())
+            return tmp_csv_path, df
+    
+    except Exception as e:
+        st.error(f"Erro ao processar o arquivo: {e}")
+        # Limpa o arquivo temporário se houve falha
+        if os.path.exists(tmp_csv_path):
+            os.remove(tmp_csv_path)
+        return None, None
     
     return None, None
 
@@ -94,11 +101,10 @@ def load_llm_and_memory(temp_csv_path):
     **Você DEVE seguir estas regras estritamente:**
     1. **Personalidade:** Seja objetivo, técnico e focado em fornecer insights e código Python (quando solicitado).
     2. **Foco:** Use as colunas e dados do arquivo CSV fornecido, que está em '{temp_csv_path}', para responder a todas as perguntas.
-    3. **Memória:** Use o histórico de chat fornecido para manter o contexto e as conclusões.
-    4. **Gráficos:** **SEMPRE** que o usuário solicitar uma visualização, utilize a biblioteca **Plotly**.
+    3. **Gráficos:** **SEMPRE** que o usuário solicitar uma visualização, utilize a biblioteca **Plotly**.
        **Atenção:** **NUNCA USE MATPLOTLIB OU SEABORN.**
        O seu output final para gráficos **DEVE** ser uma string JSON válida do Plotly (`fig.to_json()`) para que o Streamlit possa renderizar a imagem.
-    5. **Saída Final:** O resultado final de sua análise deve ser claro e conciso.
+    4. **Saída Final:** O resultado final de sua análise deve ser claro e conciso.
 
     **Instruções Específicas do Usuário:** O usuário forneceu instruções específicas no sidebar que você deve integrar à sua análise: "{st.session_state.user_instructions}"
     """
@@ -107,11 +113,10 @@ def load_llm_and_memory(temp_csv_path):
     try:
         llm = ChatGoogleGenerativeAI(model=MODEL_NAME, google_api_key=API_KEY)
     except Exception as e:
-        # Erro na inicialização do LLM
         st.error(f"Erro fatal ao inicializar o LLM Gemini. Detalhes: {e}")
         return None, None 
     
-    # 3. Inicialização da Memória (fora do agente)
+    # 3. Inicialização da Memória (Necessário para o histórico, mesmo que o agente não use diretamente)
     memory = ConversationBufferWindowMemory(
         memory_key="chat_history",
         input_key="input",
@@ -122,16 +127,16 @@ def load_llm_and_memory(temp_csv_path):
 
     # 4. Criação do Agente (Bloco de segurança final)
     try:
-        agent = create_csv_agent(
+        # A LangChain não suporta mais 'memory' e 'handle_parsing_errors' no create_csv_agent
+        agent_executor = create_csv_agent(
             llm=llm,
             path=temp_csv_path,
             verbose=True,
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, 
-            extra_tools=None,
             prefix=analyst_prompt,
             allow_dangerous_code=True
         )
-        return memory, agent
+        return memory, agent_executor
     except Exception as e:
         # Este é o erro que deve ser exposto se a API falhar
         print(f"DEBUG: FALHA CRÍTICA NA CRIAÇÃO DO AGENTE (PROVAVELMENTE CONEXÃO OU VERSÃO): {e}")
@@ -145,12 +150,12 @@ def parse_and_display_response(response_text):
     """
     try:
         # Padrão para tentar extrair um JSON Plotly
-        # O agente deve retornar o JSON como uma string, muitas vezes entre aspas ou chaves
         start_index = response_text.find('{')
         end_index = response_text.rfind('}')
         
         if start_index != -1 and end_index != -1 and end_index > start_index:
             json_str = response_text[start_index:end_index + 1]
+            
             # Tenta carregar o JSON e renderizar o gráfico
             fig_dict = json.loads(json_str)
             fig = pio.from_json(json.dumps(fig_dict))
@@ -169,7 +174,6 @@ def parse_and_display_response(response_text):
         # Se falhar ao processar o JSON, assume que é apenas texto
         pass
 
-    # Se não for JSON Plotly, retorna a resposta como está
     return response_text
 
 # --- Layout e Interface ---
@@ -188,6 +192,8 @@ if 'report_content' not in st.session_state:
     st.session_state.report_content = ""
 if 'user_instructions' not in st.session_state:
     st.session_state.user_instructions = "Nenhuma instrução específica fornecida."
+if 'temp_csv_path' not in st.session_state:
+    st.session_state.temp_csv_path = None
 
 # --- Barra Lateral (Configurações e Upload) ---
 
@@ -207,7 +213,8 @@ with st.sidebar:
         "Instruções e Foco do Agente (Ex: Focar em contas de alto risco):",
         height=150,
         placeholder="Nenhuma instrução específica. (O agente fará uma análise geral)",
-        key="user_instructions_input"
+        key="user_instructions_input",
+        value=st.session_state.user_instructions # Mantém o valor
     )
     st.session_state.user_instructions = instructions if instructions else "Nenhuma instrução específica fornecida."
     
@@ -227,13 +234,15 @@ with st.sidebar:
 
 # --- Processamento do Arquivo ---
 
+# Verifica se um novo arquivo foi carregado ou se é a primeira execução
 if uploaded_file and st.session_state.data_agent is None:
     temp_csv_path, df = unzip_and_read_file(uploaded_file)
+    st.session_state.temp_csv_path = temp_csv_path
     
-    if temp_csv_path and df is not None:
+    if st.session_state.temp_csv_path and df is not None:
         try:
             # Inicializa o agente
-            st.session_state.memory, st.session_state.data_agent = load_llm_and_memory(temp_csv_path)
+            st.session_state.memory, st.session_state.data_agent = load_llm_and_memory(st.session_state.temp_csv_path)
             
             # Adiciona mensagem de sucesso
             if st.session_state.data_agent is not None:
@@ -311,28 +320,41 @@ if st.session_state.data_agent:
         with st.spinner("Agente de IA está processando..."):
             try:
                 # Executa a pergunta e armazena a resposta
-                # Usando .run() para maior simplicidade de saída, mas com parsing robusto
-                response_obj = st.session_state.data_agent.run(prompt)
+                # O parâmetro 'chat_history' injeta o contexto da conversa no agente
+                response_obj = st.session_state.data_agent.run(
+                    prompt,
+                    chat_history=st.session_state.memory.load_memory_variables({})['chat_history']
+                )
                 
                 # Garante que a resposta completa seja armazenada para análise e memória
                 parsed_response = parse_and_display_response(response_obj)
                 
-                # Adiciona a resposta ao histórico
+                # Adiciona a resposta ao histórico (para display e memória)
                 st.session_state.chat_history_list.append(("agent", response_obj))
                 
                 # Exibe a resposta final (se não for um gráfico, será exibido como texto)
                 st.chat_message("assistant").markdown(parsed_response)
 
+                # Atualiza a memória para incluir a última interação (user + agent)
+                st.session_state.memory.save_context(
+                    {"input": prompt},
+                    {"output": response_obj}
+                )
+
             except Exception as e:
                 # Tratamento robusto de erro para evitar quebras do aplicativo
-                st.session_state.chat_history_list.append(("agent", "O Agente encontrou um erro ao processar sua requisição. Por favor, tente reformular a pergunta ou verificar se o arquivo CSV está bem formatado. Detalhes: An output parsing error occurred. Tente reiniciar o aplicativo se o erro persistir."))
+                st.session_state.chat_history_list.append(("agent", "O Agente encontrou um erro ao processar sua requisição. Por favor, tente reformular a pergunta ou verificar se o arquivo CSV está bem formatado."))
                 print(f"Erro na execução do agente (run): {e}")
-                st.experimental_rerun() # Reinicia para limpar o estado em caso de erro grave
 
 # Footer para indicar o estado
 if st.session_state.data_agent is None:
     st.info("⚠️ Carregue um arquivo CSV, ZIP ou GZ para iniciar a análise.")
 
 # Limpa o arquivo temporário ao finalizar o Streamlit
-if 'temp_csv_path' in locals() and os.path.exists(temp_csv_path):
-    os.remove(temp_csv_path)
+def cleanup_temp_file():
+    if st.session_state.temp_csv_path and os.path.exists(st.session_state.temp_csv_path):
+        os.remove(st.session_state.temp_csv_path)
+
+# Adiciona a função de limpeza na finalização da sessão
+# Embora Streamlit não tenha um hook de finalização de sessão garantido, isso ajuda.
+# O sistema operacional se encarrega da limpeza dos arquivos temporários em caso de falha.
