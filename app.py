@@ -14,7 +14,7 @@ import json
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents.agent_types import AgentType
 from langchain_experimental.agents.agent_toolkits import create_csv_agent
-from langchain.memory import ConversationBufferWindowMemory
+from langchain.memory import ConversationBufferWindowMemory # Manter esta classe para estabilidade
 import plotly.express as px
 import plotly.io as pio
 
@@ -23,7 +23,7 @@ st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e 
 
 # --- Constantes e Variáveis Globais ---
 pio.templates.default = "plotly_white"
-# CORREÇÃO FINAL: Voltando para o nome oficial do modelo para resolver o erro 404
+# Modelo final e estável
 MODEL_NAME = "gemini-2.5-flash"
 
 # Tenta obter a chave da API do Gemini do secrets.toml (Streamlit Cloud)
@@ -246,26 +246,12 @@ if uploaded_file and st.session_state.data_agent is None:
             
             # Adiciona mensagem de sucesso
             if st.session_state.data_agent is not None:
-                st.success(f"Arquivo '{uploaded_file.name}' carregado e agente inicializado!")
+                # MENSAGEM DE SUCESSO AJUSTADA
+                st.success(f"Arquivo '{uploaded_file.name}' carregado e agente inicializado! Faça sua primeira pergunta no chat abaixo, como 'Quais colunas existem?'")
                 
-                # Pergunta inicial para auto-descrição do arquivo
-                initial_q1 = f"Descreva os dados: Quais são as colunas, tipos de dados e o formato geral do arquivo? {df.shape[0]} linhas e {df.shape[1]} colunas."
-                
-                # Executa a primeira análise para preencher o chat
-                with st.spinner(f"Agente analisando o arquivo..."):
-                    try:
-                        # CORREÇÃO FINAL: Usando .invoke() em vez de .run() (Deprecation fix)
-                        response_obj = st.session_state.data_agent.invoke({"input": initial_q1})['output']
-                        initial_response = parse_and_display_response(response_obj)
+                # REMOVIDO: Bloco de execução da pergunta inicial (initial_q1)
+                # O usuário fará a primeira pergunta diretamente para evitar falhas de parsing.
                         
-                        st.session_state.chat_history_list.append(("user", initial_q1))
-                        st.session_state.chat_history_list.append(("agent", initial_response))
-                        
-                    except Exception as e:
-                        # Lida com erros de parsing logo na primeira pergunta
-                        st.session_state.chat_history_list.append(("user", initial_q1))
-                        st.session_state.chat_history_list.append(("agent", f"O Agente inicializou, mas encontrou um erro ao tentar a primeira análise. O problema de 'Output Parsing' pode ocorrer. Por favor, faça uma pergunta simples como 'Quais colunas existem?' para testar o agente."))
-                        print(f"Erro no primeiro parsing: {e}")
             else:
                 st.error("Falha ao inicializar o agente. Verifique a chave da API e as mensagens de erro na lateral.")
                     
@@ -291,7 +277,7 @@ if report_btn and st.session_state.data_agent:
     
     with st.spinner("Gerando relatório completo... Isso pode levar alguns momentos."):
         try:
-            # CORREÇÃO FINAL: Usando .invoke() em vez de .run() (Deprecation fix)
+            # Usando .invoke() em vez de .run() (Deprecation fix)
             report_response = st.session_state.data_agent.invoke({"input": report_prompt})['output']
             
             st.session_state.report_content = report_response
@@ -320,7 +306,7 @@ if st.session_state.data_agent:
         with st.spinner("Agente de IA está processando..."):
             try:
                 # Executa a pergunta e armazena a resposta
-                # CORREÇÃO FINAL: Usando .invoke() em vez de .run() (Deprecation fix)
+                # Usando .invoke() em vez de .run() (Deprecation fix)
                 response_obj = st.session_state.data_agent.invoke(
                     {
                         "input": prompt,
