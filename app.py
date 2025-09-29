@@ -105,6 +105,7 @@ def load_llm_and_memory(temp_csv_path):
        **Atenção:** **NUNCA USE MATPLOTLIB OU SEABORN.**
        O seu output final para gráficos **DEVE** ser uma string JSON válida do Plotly (`fig.to_json()`) para que o Streamlit possa renderizar a imagem.
     4. **Saída Final:** O resultado final de sua análise deve ser claro e conciso.
+    5. **Ação Final (CRÍTICA):** Se a resposta incluir um gráfico JSON, ou se for uma resposta final, **NÃO** utilize tags de 'Final Answer'. Apenas gere o conteúdo da resposta para evitar erros de parsing.
     """
 
     # 2. Configuração do Modelo e Agente
@@ -115,6 +116,7 @@ def load_llm_and_memory(temp_csv_path):
         return None, None 
     
     # 3. Inicialização da Memória (Necessário para o histórico)
+    # LangChainDeprecationWarning: Este aviso será removido com a migração completa.
     memory = ConversationBufferWindowMemory(
         memory_key="chat_history",
         input_key="input",
