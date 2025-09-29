@@ -105,8 +105,6 @@ def load_llm_and_memory(temp_csv_path):
        **Atenção:** **NUNCA USE MATPLOTLIB OU SEABORN.**
        O seu output final para gráficos **DEVE** ser uma string JSON válida do Plotly (`fig.to_json()`) para que o Streamlit possa renderizar a imagem.
     4. **Saída Final:** O resultado final de sua análise deve ser claro e conciso.
-
-    **Instruções Específicas do Usuário:** O usuário forneceu instruções específicas no sidebar que você deve integrar à sua análise: "{st.session_state.user_instructions}"
     """
 
     # 2. Configuração do Modelo e Agente
@@ -190,8 +188,6 @@ if 'chat_history_list' not in st.session_state:
     st.session_state.chat_history_list = []
 if 'report_content' not in st.session_state:
     st.session_state.report_content = ""
-if 'user_instructions' not in st.session_state:
-    st.session_state.user_instructions = "Nenhuma instrução específica fornecida."
 if 'temp_csv_path' not in st.session_state:
     st.session_state.temp_csv_path = None
 
@@ -207,22 +203,13 @@ with st.sidebar:
         key="file_uploader"
     )
     
-    # 2. Instruções Personalizadas
-    st.subheader("Instruções de Análise")
-    instructions = st.text_area(
-        "Instruções e Foco do Agente (Ex: Focar em contas de alto risco):",
-        height=150,
-        placeholder="Nenhuma instrução específica. (O agente fará uma análise geral)",
-        key="user_instructions_input",
-        value=st.session_state.user_instructions # Mantém o valor
-    )
-    st.session_state.user_instructions = instructions if instructions else "Nenhuma instrução específica fornecida."
+    # REMOVIDA: Seção de Instruções Personalizadas
     
-    # 3. Botão de Relatório Completo
+    # 2. Botão de Relatório Completo
     st.subheader("Relatório Final")
     report_btn = st.button("📝 Gerar Relatório Completo", use_container_width=True)
     
-    # 4. Botão de Download (Depende do conteúdo do relatório)
+    # 3. Botão de Download (Depende do conteúdo do relatório)
     if st.session_state.report_content:
         st.download_button(
             label="⬇️ Baixar Relatório (Markdown)",
