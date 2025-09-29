@@ -133,7 +133,9 @@ def load_llm_and_memory(temp_csv_path):
             verbose=True,
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, 
             prefix=analyst_prompt,
-            allow_dangerous_code=True
+            allow_dangerous_code=True,
+            # CORREÇÃO CRÍTICA: Permite auto-correção do LLM em falhas de parsing
+            handle_parsing_errors=True
         )
         return memory, agent_executor
     except Exception as e:
