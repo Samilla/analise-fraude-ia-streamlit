@@ -23,8 +23,8 @@ st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e 
 
 # --- Constantes e Variáveis Globais ---
 pio.templates.default = "plotly_white"
-# Nome do modelo ajustado para forçar a reconstrução e estabilidade no Streamlit Cloud
-MODEL_NAME = "gemini-2.5-flash-001"
+# CORREÇÃO FINAL: Voltando para o nome oficial do modelo para resolver o erro 404
+MODEL_NAME = "gemini-2.5-flash"
 
 # Tenta obter a chave da API do Gemini do secrets.toml (Streamlit Cloud)
 try:
@@ -116,7 +116,7 @@ def load_llm_and_memory(temp_csv_path):
         st.error(f"Erro fatal ao inicializar o LLM Gemini. Detalhes: {e}")
         return None, None 
     
-    # 3. Inicialização da Memória (Necessário para o histórico, mesmo que o agente não use diretamente)
+    # 3. Inicialização da Memória (Necessário para o histórico)
     memory = ConversationBufferWindowMemory(
         memory_key="chat_history",
         input_key="input",
@@ -254,8 +254,8 @@ if uploaded_file and st.session_state.data_agent is None:
                 # Executa a primeira análise para preencher o chat
                 with st.spinner(f"Agente analisando o arquivo..."):
                     try:
-                        # Executa a pergunta inicial e armazena a resposta
-                        response_obj = st.session_state.data_agent.run(initial_q1)
+                        # CORREÇÃO FINAL: Usando .invoke() em vez de .run() (Deprecation fix)
+                        response_obj = st.session_state.data_agent.invoke({"input": initial_q1})['output']
                         initial_response = parse_and_display_response(response_obj)
                         
                         st.session_state.chat_history_list.append(("user", initial_q1))
@@ -291,8 +291,8 @@ if report_btn and st.session_state.data_agent:
     
     with st.spinner("Gerando relatório completo... Isso pode levar alguns momentos."):
         try:
-            # Roda o agente com o prompt de relatório
-            report_response = st.session_state.data_agent.run(report_prompt)
+            # CORREÇÃO FINAL: Usando .invoke() em vez de .run() (Deprecation fix)
+            report_response = st.session_state.data_agent.invoke({"input": report_prompt})['output']
             
             st.session_state.report_content = report_response
             st.success("Relatório gerado com sucesso! Use o botão 'Baixar Relatório (Markdown)' na lateral.")
@@ -320,11 +320,13 @@ if st.session_state.data_agent:
         with st.spinner("Agente de IA está processando..."):
             try:
                 # Executa a pergunta e armazena a resposta
-                # O parâmetro 'chat_history' injeta o contexto da conversa no agente
-                response_obj = st.session_state.data_agent.run(
-                    prompt,
-                    chat_history=st.session_state.memory.load_memory_variables({})['chat_history']
-                )
+                # CORREÇÃO FINAL: Usando .invoke() em vez de .run() (Deprecation fix)
+                response_obj = st.session_state.data_agent.invoke(
+                    {
+                        "input": prompt,
+                        "chat_history": st.session_state.memory.load_memory_variables({})['chat_history']
+                    }
+                )['output']
                 
                 # Garante que a resposta completa seja armazenada para análise e memória
                 parsed_response = parse_and_display_response(response_obj)
