@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini e LangChain
 # Desenvolvido para um projeto de curso de Agentes de IA.
 # Versão Final Corrigida e Estável.
