@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini e LangChain
 # Desenvolvido para um projeto de curso de Agentes de IA.
 # Versão Final Corrigida e Estável.
@@ -126,16 +127,14 @@ def load_llm_and_memory(temp_csv_path):
 
     # 4. Criação do Agente (Bloco de segurança final)
     try:
-        # A LangChain não suporta mais 'memory' e 'handle_parsing_errors' no create_csv_agent
+        # CORREÇÃO FINAL: Remoção de handle_parsing_errors=True
         agent_executor = create_csv_agent(
             llm=llm,
             path=temp_csv_path,
             verbose=True,
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, 
             prefix=analyst_prompt,
-            allow_dangerous_code=True,
-            # CORREÇÃO CRÍTICA: Permite auto-correção do LLM em falhas de parsing
-            handle_parsing_errors=True
+            allow_dangerous_code=True
         )
         return memory, agent_executor
     except Exception as e:
