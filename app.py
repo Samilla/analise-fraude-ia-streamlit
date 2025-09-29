@@ -38,7 +38,7 @@ if not API_KEY:
 
 # --- Funções de Manipulação de Arquivos ---
 
-@st.cache_data(show_spinner="Descompactando arquivo...")
+# REMOVIDA A ANOTAÇÃO st.cache_data PARA EVITAR O ERRO 'No such file or directory'
 def unzip_and_read_file(uploaded_file):
     """
     Descompacta arquivos ZIP ou GZ e lê o conteúdo CSV.
@@ -46,27 +46,25 @@ def unzip_and_read_file(uploaded_file):
     """
     file_extension = uploaded_file.name.lower().split('.')[-1]
     
+    # Resetar o ponteiro do arquivo
+    uploaded_file.seek(0)
+    
     if file_extension == 'zip':
         with zipfile.ZipFile(uploaded_file, 'r') as zf:
-            # Tenta encontrar o primeiro CSV dentro do ZIP
             csv_files = [name for name in zf.namelist() if name.endswith('.csv')]
             if not csv_files:
                 return None, None
             
-            # Lê o primeiro CSV encontrado
             with zf.open(csv_files[0]) as csv_file:
                 df = pd.read_csv(csv_file)
-                # Salva o arquivo em disco temporário para o agente acessar
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
                     df.to_csv(tmp_file.name, index=False)
                     return tmp_file.name, df
     
     elif uploaded_file.name.endswith('.gz'):
-        # Lida com arquivos GZ (que podem ser CSVs gzipados)
         try:
             with gzip.open(uploaded_file, 'rt') as gz_file:
                 df = pd.read_csv(gz_file)
-                # Salva o arquivo em disco temporário para o agente acessar
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
                     df.to_csv(tmp_file.name, index=False)
                     return tmp_file.name, df
@@ -74,9 +72,7 @@ def unzip_and_read_file(uploaded_file):
             return None, None
 
     elif file_extension == 'csv':
-        # Arquivo CSV normal
         df = pd.read_csv(uploaded_file)
-        # Salva o arquivo em disco temporário para o agente acessar
         with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
             uploaded_file.seek(0)
             tmp_file.write(uploaded_file.read())
@@ -116,7 +112,6 @@ def load_llm_and_memory(temp_csv_path):
         return None, None 
     
     # 3. Inicialização da Memória (fora do agente)
-    # A memória será gerenciada manualmente via histórico do chat (chat_history_list)
     memory = ConversationBufferWindowMemory(
         memory_key="chat_history",
         input_key="input",
@@ -127,7 +122,6 @@ def load_llm_and_memory(temp_csv_path):
 
     # 4. Criação do Agente (Bloco de segurança final)
     try:
-        # A memória foi removida daqui para evitar o conflito de inicialização
         agent = create_csv_agent(
             llm=llm,
             path=temp_csv_path,
@@ -342,4 +336,3 @@ if st.session_state.data_agent is None:
 # Limpa o arquivo temporário ao finalizar o Streamlit
 if 'temp_csv_path' in locals() and os.path.exists(temp_csv_path):
     os.remove(temp_csv_path)
-
