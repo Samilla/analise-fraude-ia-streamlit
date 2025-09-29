@@ -14,7 +14,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents.agent_types import AgentType
 from langchain_experimental.agents.agent_toolkits import create_csv_agent
 from langchain.schema import HumanMessage, SystemMessage
-from langchain.memory import ConversationBufferMemory # CORRIGIDO: Usando a classe de memória base não descontinuada
+from langchain.memory import ConversationBufferWindowMemory # Usado apenas para o histórico do chat (fora do agente)
 from langchain.agents import AgentExecutor
 import plotly.express as px
 import plotly.io as pio
@@ -98,7 +98,7 @@ def load_llm_and_memory(temp_csv_path):
     **Você DEVE seguir estas regras estritamente:**
     1. **Personalidade:** Seja objetivo, técnico e focado em fornecer insights e código Python (quando solicitado).
     2. **Foco:** Use as colunas e dados do arquivo CSV fornecido, que está em '{temp_csv_path}', para responder a todas as perguntas.
-    3. **Memória:** Lembre-se do histórico da conversa para manter o contexto e as conclusões.
+    3. **Memória:** Use o histórico de chat fornecido para manter o contexto e as conclusões.
     4. **Gráficos:** **SEMPRE** que o usuário solicitar uma visualização, utilize a biblioteca **Plotly**.
        **Atenção:** **NUNCA USE MATPLOTLIB OU SEABORN.**
        O seu output final para gráficos **DEVE** ser uma string JSON válida do Plotly (`fig.to_json()`) para que o Streamlit possa renderizar a imagem.
@@ -109,22 +109,25 @@ def load_llm_and_memory(temp_csv_path):
 
     # 2. Configuração do Modelo e Agente
     try:
-        # Uso de ChatGoogleGenerativeAI (mais estável para agentes)
         llm = ChatGoogleGenerativeAI(model=MODEL_NAME, google_api_key=API_KEY)
     except Exception as e:
-        st.error(f"Erro ao carregar o modelo Gemini. Verifique a chave da API: {e}")
+        # Erro na inicialização do LLM
+        st.error(f"Erro fatal ao inicializar o LLM Gemini. Detalhes: {e}")
         return None, None 
     
-    # CORRIGIDO: Usando ConversationBufferMemory para evitar o aviso de depreciação
-    memory = ConversationBufferMemory(
+    # 3. Inicialização da Memória (fora do agente)
+    # A memória será gerenciada manualmente via histórico do chat (chat_history_list)
+    memory = ConversationBufferWindowMemory(
         memory_key="chat_history",
         input_key="input",
         return_messages=True,
+        k=5, 
         ai_prefix="Analista"
     )
 
-    # 3. Criação do Agente (Bloco de segurança para garantir a tupla de retorno)
+    # 4. Criação do Agente (Bloco de segurança final)
     try:
+        # A memória foi removida daqui para evitar o conflito de inicialização
         agent = create_csv_agent(
             llm=llm,
             path=temp_csv_path,
@@ -132,15 +135,14 @@ def load_llm_and_memory(temp_csv_path):
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, 
             extra_tools=None,
             prefix=analyst_prompt,
-            # memory e handle_parsing_errors foram removidos na correção anterior
             allow_dangerous_code=True
         )
         return memory, agent
     except Exception as e:
-        # Log de debug para capturar a causa raiz do erro NoneType
-        print(f"DEBUG: ERRO REAL AO CRIAR AGENTE CSV: {e}")
-        st.error(f"Erro ao criar o agente CSV. Verifique as dependências e o LLM. Detalhes: {e}")
-        return None, None # Garante que retorna uma tupla em caso de falha
+        # Este é o erro que deve ser exposto se a API falhar
+        print(f"DEBUG: FALHA CRÍTICA NA CRIAÇÃO DO AGENTE (PROVAVELMENTE CONEXÃO OU VERSÃO): {e}")
+        st.error(f"Erro CRÍTICO ao criar o Agente CSV. Verifique a API Key e as logs. Detalhes: {e}")
+        return None, None 
 
 def parse_and_display_response(response_text):
     """
@@ -340,3 +342,4 @@ if st.session_state.data_agent is None:
 # Limpa o arquivo temporário ao finalizar o Streamlit
 if 'temp_csv_path' in locals() and os.path.exists(temp_csv_path):
     os.remove(temp_csv_path)
+
