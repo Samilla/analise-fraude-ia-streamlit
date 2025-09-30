@@ -14,7 +14,7 @@ import json
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents.agent_types import AgentType
 from langchain_experimental.agents.agent_toolkits import create_csv_agent
-from langchain.memory import ConversationBufferWindowMemory # Manter esta classe para estabilidade
+from langchain.memory import ConversationBufferMemory # Usando BufferMemory para evitar o Warning
 import plotly.express as px
 import plotly.io as pio
 
@@ -31,10 +31,10 @@ try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
 except (KeyError, AttributeError):
     # Se estiver rodando localmente sem secrets.toml, usa variável de ambiente
-    API_KEY = os.environ.get("GEMINI_API_KEY", "")
+    API_KEY = os.environ.get("GEMINI_KEY", "") # Nota: 'GEMINI_KEY' é comum em ambientes
 
 if not API_KEY:
-    st.error("ERRO: Chave da API do Gemini não encontrada. Configure a chave no .streamlit/secrets.toml ou na variável de ambiente GEMINI_API_KEY.")
+    st.error("ERRO: Chave da API do Gemini não encontrada. Configure a chave no .streamlit/secrets.toml ou na variável de ambiente GEMINI_KEY.")
 
 # --- Funções de Manipulação de Arquivos ---
 
@@ -115,24 +115,22 @@ def load_llm_and_memory(temp_csv_path):
         st.error(f"Erro fatal ao inicializar o LLM Gemini. Detalhes: {e}")
         return None, None 
     
-    # 3. Inicialização da Memória (Necessário para o histórico)
-    # LangChainDeprecationWarning: Este aviso será removido com a migração completa.
-    memory = ConversationBufferWindowMemory(
+    # 3. Inicialização da Memória (Memória base para evitar warnings)
+    memory = ConversationBufferMemory(
         memory_key="chat_history",
         input_key="input",
         return_messages=True,
-        k=5, 
         ai_prefix="Analista"
     )
 
     # 4. Criação do Agente (Bloco de segurança final)
     try:
-        # CORREÇÃO FINAL: Remoção de handle_parsing_errors=True
+        # CORREÇÃO CRÍTICA: Mudar para OPENAI_FUNCTIONS para estabilidade de parsing com Gemini
         agent_executor = create_csv_agent(
             llm=llm,
             path=temp_csv_path,
             verbose=True,
-            agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, 
+            agent_type=AgentType.OPENAI_FUNCTIONS, 
             prefix=analyst_prompt,
             allow_dangerous_code=True
         )
