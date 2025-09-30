@@ -101,11 +101,11 @@ def load_llm_and_memory(temp_csv_path):
     **Você DEVE seguir estas regras estritamente:**
     1. **Personalidade:** Seja objetivo, técnico e focado em fornecer insights e código Python (quando solicitado).
     2. **Foco:** Use as colunas e dados do arquivo CSV fornecido, que está em '{temp_csv_path}', para responder a todas as perguntas.
-    3. **Gráficos:** **SEMPRE** que o usuário solicitar uma visualização, utilize a biblioteca **Plotly**.
+    3. **Gráficos (CRÍTICO):** **SEMPRE** que o usuário solicitar uma visualização, utilize a biblioteca **Plotly**.
        **Atenção:** **NUNCA USE MATPLOTLIB OU SEABORN.**
-       O seu output final para gráficos **DEVE** ser uma string JSON válida do Plotly (`fig.to_json()`) para que o Streamlit possa renderizar a imagem.
+       O seu output final para gráficos **DEVE** ser uma string JSON válida do Plotly (`fig.to_json()`), **delimitada OBRIGATORIAMENTE pelas tags <PLOTLY_JSON> e </PLOTLY_JSON>**. Nenhuma outra informação deve estar dentro dessas tags.
     4. **Saída Final:** O resultado final de sua análise deve ser claro e conciso.
-    5. **Ação Final (CRÍTICA):** Se a resposta incluir um gráfico JSON, ou se for uma resposta final, **NÃO** utilize tags de 'Final Answer'. Apenas gere o conteúdo da resposta para evitar erros de parsing.
+    5. **Ação Final:** Se a resposta incluir um gráfico JSON, ou se for uma resposta final, **NÃO** utilize tags de 'Final Answer'. Apenas gere o conteúdo da resposta.
     """
 
     # 2. Configuração do Modelo e Agente
@@ -125,7 +125,7 @@ def load_llm_and_memory(temp_csv_path):
 
     # 4. Criação do Agente (Bloco de segurança final)
     try:
-        # CORREÇÃO CRÍTICA: Mudar para OPENAI_FUNCTIONS para estabilidade de parsing com Gemini
+        # Usando OPENAI_FUNCTIONS para estabilidade de parsing com Gemini
         agent_executor = create_csv_agent(
             llm=llm,
             path=temp_csv_path,
@@ -143,35 +143,41 @@ def load_llm_and_memory(temp_csv_path):
 
 def parse_and_display_response(response_text):
     """
-    Analisa a resposta do agente, procurando por JSON do Plotly.
-    Se encontrar, renderiza o gráfico; caso contrário, exibe como texto.
+    Analisa a resposta do agente, procurando por JSON do Plotly usando as tags
+    <PLOTLY_JSON>...</PLOTLY_JSON>. Se encontrar, renderiza o gráfico; caso contrário,
+    exibe como texto.
     """
-    try:
-        # Padrão para tentar extrair um JSON Plotly
-        start_index = response_text.find('{')
-        end_index = response_text.rfind('}')
+    START_TAG = "<PLOTLY_JSON>"
+    END_TAG = "</PLOTLY_JSON>"
+
+    start_index = response_text.find(START_TAG)
+    end_index = response_text.find(END_TAG)
+    
+    if start_index != -1 and end_index != -1 and end_index > start_index:
+        # Extrai o JSON que está entre as tags
+        json_str = response_text[start_index + len(START_TAG):end_index].strip()
         
-        if start_index != -1 and end_index != -1 and end_index > start_index:
-            json_str = response_text[start_index:end_index + 1]
-            
+        try:
             # Tenta carregar o JSON e renderizar o gráfico
             fig_dict = json.loads(json_str)
             fig = pio.from_json(json.dumps(fig_dict))
             
-            # Renderiza o gráfico e exibe a mensagem de sucesso
+            # Renderiza o gráfico
             st.plotly_chart(fig, use_container_width=True)
             
-            # Remove o JSON da resposta para exibir apenas o texto explicativo
-            text_response = response_text[:start_index].strip()
+            # Remove o JSON e as tags da resposta para exibir apenas o texto explicativo
+            text_response = response_text.replace(response_text[start_index:end_index + len(END_TAG)], "").strip()
             if not text_response:
                 text_response = "Gráfico gerado com sucesso. Analise a visualização acima."
                 
             return text_response
     
-    except Exception as e:
-        # Se falhar ao processar o JSON, assume que é apenas texto
-        pass
+        except Exception as e:
+            # Se falhar ao processar o JSON extraído, loga o erro e trata como texto
+            print(f"DEBUG: Falha na decodificação do JSON Plotly extraído. Erro: {e}")
+            pass
 
+    # Se não encontrou as tags ou falhou na decodificação, retorna o texto original
     return response_text
 
 # --- Layout e Interface ---
