@@ -112,7 +112,13 @@ def load_llm_and_memory(temp_csv_path):
 
     # 2. Configuração do Modelo e Agente
     try:
-        llm = ChatGoogleGenerativeAI(model=MODEL_NAME, google_api_key=API_KEY)
+        llm = ChatGoogleGenerativeAI(
+            model=MODEL_NAME, 
+            google_api_key=API_KEY,
+            # Adicionando temperatura baixa e timeout para estabilidade
+            temperature=0.0, 
+            timeout=120  # Aumenta o tempo limite para 120 segundos
+        )
     except Exception as e:
         st.error(f"Erro fatal ao inicializar o LLM Gemini. Detalhes: {e}")
         return None, None 
