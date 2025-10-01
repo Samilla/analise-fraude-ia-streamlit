@@ -14,7 +14,7 @@ import json
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents.agent_types import AgentType
 from langchain_experimental.agents.agent_toolkits import create_csv_agent
-from langchain.memory import ConversationBufferMemory # Usando BufferMemory para evitar o Warning
+from langchain.memory import ConversationBufferWindowMemory # Usando WindowMemory para estabilidade e contexto
 import plotly.express as px
 import plotly.io as pio
 
@@ -116,11 +116,13 @@ def load_llm_and_memory(temp_csv_path):
         return None, None 
     
     # 3. Inicialização da Memória (Memória base para evitar warnings)
-    memory = ConversationBufferMemory(
+    # Aumentando o k (janela) para melhor contexto, e usando a classe recomendada
+    memory = ConversationBufferWindowMemory(
         memory_key="chat_history",
         input_key="input",
         return_messages=True,
-        ai_prefix="Analista"
+        ai_prefix="Analista",
+        k=5 
     )
 
     # 4. Criação do Agente (Bloco de segurança final)
