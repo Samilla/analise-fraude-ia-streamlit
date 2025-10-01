@@ -89,9 +89,11 @@ def unzip_and_read_file(uploaded_file):
 
 # --- Funções do Agente ---
 
+@st.cache_resource
 def load_llm_and_memory(temp_csv_path):
     """
     Cria e carrega a memória e o agente de IA com o prompt de especialista.
+    **CACHED:** Esta função é executada apenas uma vez por sessão.
     """
     # 1. Prompt do Especialista (Regras Rígidas)
     analyst_prompt = f"""
