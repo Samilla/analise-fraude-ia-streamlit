@@ -124,11 +124,10 @@ def load_llm_and_memory(temp_csv_path):
         return None, None 
     
     # 3. Inicialização da Memória (Memória base para evitar warnings)
-    # Correção FINAL do Warning: Estrutura explícita de input/output
+    # CONFIGURAÇÃO SIMPLIFICADA E ESTÁVEL PARA AGENTES DE CHAT
     memory = ConversationBufferWindowMemory(
         memory_key="chat_history",
         input_key="input",
-        output_key="output",  # Adicionado para evitar incompatibilidade interna
         return_messages=True,
         ai_prefix="Analista",
         k=5 
@@ -136,12 +135,12 @@ def load_llm_and_memory(temp_csv_path):
 
     # 4. Criação do Agente (Bloco de segurança final)
     try:
-        # Usando OPENAI_FUNCTIONS para estabilidade de parsing com Gemini
+        # Usando ZERO_SHOT_REACT_DESCRIPTION para maior tolerância a parsing
         agent_executor = create_csv_agent(
             llm=llm,
             path=temp_csv_path,
             verbose=True,
-            agent_type=AgentType.OPENAI_FUNCTIONS, 
+            agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION, # TROCA CRÍTICA
             prefix=analyst_prompt,
             allow_dangerous_code=True
         )
