@@ -107,7 +107,7 @@ def load_llm_and_memory(temp_csv_path):
        **Atenção:** **NUNCA USE MATPLOTLIB OU SEABORN.**
        O seu output final para gráficos **DEVE** ser uma string JSON válida do Plotly (`fig.to_json()`), **delimitada OBRIGATORIAMENTE pelas tags <PLOTLY_JSON> e </PLOTLY_JSON>**. Nenhuma outra informação deve estar dentro dessas tags.
     4. **Saída Final:** O resultado final de sua análise deve ser claro e conciso.
-    5. **Ação Final:** Se a resposta incluir um gráfico JSON, ou se for uma resposta final, **NÃO** utilize tags de 'Final Answer'. Apenas gere o conteúdo da resposta.
+    5. **Ação Final:** O Agente deve responder APENAS com o resultado da sua análise. NUNCA use tags de 'Final Answer'.
     """
 
     # 2. Configuração do Modelo e Agente
@@ -124,10 +124,11 @@ def load_llm_and_memory(temp_csv_path):
         return None, None 
     
     # 3. Inicialização da Memória (Memória base para evitar warnings)
-    # Aumentando o k (janela) para melhor contexto, e usando a classe recomendada
+    # Correção FINAL do Warning: Estrutura explícita de input/output
     memory = ConversationBufferWindowMemory(
         memory_key="chat_history",
         input_key="input",
+        output_key="output",  # Adicionado para evitar incompatibilidade interna
         return_messages=True,
         ai_prefix="Analista",
         k=5 
