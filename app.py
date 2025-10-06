@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini SDK (Versão Final Estável)
 # Elimina a LangChain para resolver erros de Output Parsing e Depreciação.
 
@@ -34,15 +35,17 @@ if not API_KEY:
 
 @st.cache_resource
 def get_gemini_client(api_key, model_name):
-    """Inicializa e armazena o cliente Gemini na cache para evitar consumo de cota."""
+    """
+    Inicializa e armazena o cliente Gemini na cache para evitar consumo de cota.
+    A temperatura (temperature) é definida APENAS na chamada generate_content.
+    """
     if not api_key:
         return None
     try:
         genai.configure(api_key=api_key)
         client = genai.GenerativeModel(
-            model_name=model_name,
-            # CORREÇÃO CRÍTICA: Passando temperature diretamente, sem o wrapper 'config'
-            temperature=0.0
+            model_name=model_name
+            # CORREÇÃO CRÍTICA: 'temperature' removida daqui, pois a nova versão do SDK não a aceita
         )
         return client
     except Exception as e:
@@ -119,6 +122,7 @@ def get_specialist_prompt(df_head, temp_csv_path):
        `print(f"<PLOTLY_JSON>{{fig.to_json()}}</PLOTLY_JSON>")`
     4. **Caminho do Arquivo:** **SEMPRE** use `pd.read_csv('{temp_csv_path}')` dentro do código Python que você gerar.
     5. **Evitar Quebra:** Mantenha as respostas focadas. Não use raciocínio em etapas ou comandos internos do LangChain que causam erros de parsing.
+    6. **Resumo:** Ao final da sua análise ou do código, forneça um resumo claro e conciso da sua conclusão.
     """
 
 def execute_python_code(code_str, temp_csv_path):
@@ -266,7 +270,10 @@ if report_btn and st.session_state.df is not None:
 
     with st.spinner("Gerando relatório completo..."):
         try:
-            response = gemini_client.generate_content(full_prompt)
+            response = gemini_client.generate_content(
+                full_prompt, 
+                config={"temperature": 0.0} # Configuração de precisão
+            )
             st.session_state.report_content = response.text
             st.success("Relatório gerado com sucesso! Use o botão 'Baixar Relatório (Markdown)' na lateral.")
             
@@ -301,7 +308,10 @@ if st.session_state.df is not None and gemini_client:
                 full_context = st.session_state.specialist_prompt + "\n\n" + history_context
 
                 # Chama a API do Gemini com o contexto completo
-                response = gemini_client.generate_content(full_context)
+                response = gemini_client.generate_content(
+                    full_context,
+                    config={"temperature": 0.0} # Configuração de precisão
+                )
                 response_text = response.text
                 
                 # Adiciona a resposta completa ao histórico
