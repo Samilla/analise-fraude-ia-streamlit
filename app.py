@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini SDK (Versão Final Estável)
 # Elimina a LangChain para resolver erros de Output Parsing e Depreciação.
 
@@ -42,10 +41,8 @@ def get_gemini_client(api_key, model_name):
         genai.configure(api_key=api_key)
         client = genai.GenerativeModel(
             model_name=model_name,
-            # CORREÇÃO CRÍTICA: Usando dicionário 'config' em vez da classe GenerateContentConfig
-            config={
-                "temperature": 0.0
-            }
+            # CORREÇÃO CRÍTICA: Passando temperature diretamente, sem o wrapper 'config'
+            temperature=0.0
         )
         return client
     except Exception as e:
