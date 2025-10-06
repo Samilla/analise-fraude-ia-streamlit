@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini SDK (Versão Final Estável)
 # Elimina a LangChain para resolver erros de Output Parsing e Depreciação.
 
@@ -45,7 +44,7 @@ def get_gemini_client(api_key, model_name):
         genai.configure(api_key=api_key)
         client = genai.GenerativeModel(
             model_name=model_name
-            # CORREÇÃO CRÍTICA: 'temperature' removida daqui, pois a nova versão do SDK não a aceita
+            # 'temperature' é passada na chamada para evitar erros de compatibilidade do SDK
         )
         return client
     except Exception as e:
@@ -100,8 +99,12 @@ def unzip_and_read_file(uploaded_file):
     except Exception as e:
         st.error(f"Erro ao processar o arquivo: {e}")
         if os.path.exists(tmp_csv_path):
-            os.remove(tmp_csv_path)
+            os.remove(os.path.abspath(tmp_csv_path)) # Garante a remoção
         return None, None
+    
+    # Adiciona a remoção do arquivo no final para limpar o sistema de arquivos
+    if os.path.exists(tmp_csv_path):
+        st.session_state.temp_csv_path_to_delete = tmp_csv_path
     
     return None, None
 
@@ -272,7 +275,7 @@ if report_btn and st.session_state.df is not None:
         try:
             response = gemini_client.generate_content(
                 full_prompt, 
-                config={"temperature": 0.0} # Configuração de precisão
+                config={"temperature": 0.0, "timeout": 180} # Configuração de precisão e timeout
             )
             st.session_state.report_content = response.text
             st.success("Relatório gerado com sucesso! Use o botão 'Baixar Relatório (Markdown)' na lateral.")
@@ -310,7 +313,7 @@ if st.session_state.df is not None and gemini_client:
                 # Chama a API do Gemini com o contexto completo
                 response = gemini_client.generate_content(
                     full_context,
-                    config={"temperature": 0.0} # Configuração de precisão
+                    config={"temperature": 0.0, "timeout": 180} # Configuração de precisão e timeout
                 )
                 response_text = response.text
                 
