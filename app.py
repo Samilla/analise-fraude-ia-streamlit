@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini SDK (Versão Final Estável)
 # Elimina a LangChain para resolver erros de Output Parsing e Depreciação.
 
@@ -41,9 +42,10 @@ def get_gemini_client(api_key, model_name):
         genai.configure(api_key=api_key)
         client = genai.GenerativeModel(
             model_name=model_name,
-            config=genai.types.GenerateContentConfig(
-                temperature=0.0
-            )
+            # CORREÇÃO CRÍTICA: Usando dicionário 'config' em vez da classe GenerateContentConfig
+            config={
+                "temperature": 0.0
+            }
         )
         return client
     except Exception as e:
@@ -70,7 +72,6 @@ def unzip_and_read_file(uploaded_file):
 
     try:
         # Lógica de descompactação e leitura
-        # [Conteúdo da função omitido por ser idêntico e funcional]
         if file_extension == 'zip':
             with zipfile.ZipFile(uploaded_file, 'r') as zf:
                 csv_files = [name for name in zf.namelist() if name.endswith('.csv')]
@@ -118,7 +119,7 @@ def get_specialist_prompt(df_head, temp_csv_path):
     1. **Ferramenta Única:** Você tem acesso à biblioteca Pandas.
     2. **Saída de Gráfico:** **SEMPRE** que o usuário solicitar uma visualização, gere o código Python completo usando **Plotly Express (px)**.
     3. **Formato:** O código Python para o gráfico deve ser **impresso** no formato de string JSON do Plotly, usando o comando:
-       `print(f"<PLOTLY_JSON>{fig.to_json()}</PLOTLY_JSON>")`
+       `print(f"<PLOTLY_JSON>{{fig.to_json()}}</PLOTLY_JSON>")`
     4. **Caminho do Arquivo:** **SEMPRE** use `pd.read_csv('{temp_csv_path}')` dentro do código Python que você gerar.
     5. **Evitar Quebra:** Mantenha as respostas focadas. Não use raciocínio em etapas ou comandos internos do LangChain que causam erros de parsing.
     """
