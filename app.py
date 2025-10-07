@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini SDK (Versão Final Estável)
 # Implementado Streaming e OTIMIZAÇÃO DE PROTOCOLO para resolver erros de Timeout.
 
@@ -104,6 +105,12 @@ def unzip_and_read_file(uploaded_file):
     
     return tmp_csv_path, df
 
+# NOVO: Cache para o DataFrame usado no exec(), eliminando a leitura repetida do disco
+@st.cache_data
+def get_execution_df(temp_csv_path):
+    """Lê o DataFrame uma vez e o armazena na cache para execuções rápidas."""
+    return pd.read_csv(temp_csv_path)
+
 def get_specialist_prompt(df, temp_csv_path):
     """Gera o prompt de sistema para instruir o Gemini como especialista."""
     # Envia APENAS metadados (colunas e tipos) para economizar tokens/tempo
@@ -123,19 +130,23 @@ def get_specialist_prompt(df, temp_csv_path):
     2. **Saída de Gráfico:** **SEMPRE** que o usuário solicitar uma visualização, gere o código Python completo usando **Plotly Express (px)**.
     3. **Formato:** O código Python para o gráfico deve ser **impresso** no formato de string JSON do Plotly, usando o comando:
        `print(f"<PLOTLY_JSON>{{fig.to_json()}}</PLOTLY_JSON>")`
-    4. **Caminho do Arquivo:** **SEMPRE** use `pd.read_csv('{temp_csv_path}')` dentro do código Python que você gerar.
+    4. **Caminho do Arquivo:** **SEMPRE** use `df` no código Python (o DataFrame já está pré-carregado no ambiente de execução).
     5. **Tolerância:** Responda à pergunta do usuário diretamente após gerar o código. Não use raciocínio em etapas.
     6. **Resumo:** Ao final da sua análise ou do código, forneça um resumo claro e conciso da sua conclusão.
     """
 
 def execute_python_code(code_str, temp_csv_path):
     """Executa código Python gerado pelo LLM em um ambiente seguro."""
+    
+    # Obtém o DataFrame da cache para execução instantânea
+    df_exec = get_execution_df(temp_csv_path)
+    
     # Define o ambiente de execução com o dataframe lido
     exec_globals = {
         'pd': pd,
         'px': px,
         'plt': None, # Remove matplotlib
-        'df': pd.read_csv(temp_csv_path),
+        'df': df_exec, # Usa o DataFrame cacheado
         'print': print # Permite que o LLM use print para comunicação
     }
     
@@ -314,7 +325,6 @@ if st.session_state.df is not None and gemini_client:
         with st.spinner("Agente de IA está processando..."):
             try:
                 # Otimização de contexto: Limita o histórico
-                MAX_HISTORY_SIZE = 10
                 limited_history = st.session_state.chat_history_list[-MAX_HISTORY_SIZE:]
 
                 # Constrói o histórico da conversa no formato de mensagens do Gemini SDK
