@@ -21,6 +21,8 @@ st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e 
 # --- Constantes e Variáveis Globais ---
 pio.templates.default = "plotly_white"
 MODEL_NAME = "gemini-2.5-flash"
+# Limite o histórico da conversa para evitar timeout (equivale ao ConversationBufferWindowMemory)
+MAX_HISTORY_SIZE = 10 
 
 # Tenta obter a chave da API do Gemini do secrets.toml (Streamlit Cloud)
 try:
@@ -312,15 +314,19 @@ if st.session_state.df is not None and gemini_client:
 
         with st.spinner("Agente de IA está processando..."):
             try:
+                # Otimização de contexto: Limita o histórico
+                MAX_HISTORY_SIZE = 10
+                limited_history = st.session_state.chat_history_list[-MAX_HISTORY_SIZE:]
+
                 # Constrói o histórico da conversa no formato de mensagens do Gemini SDK
                 history_contents = []
-                for item in st.session_state.chat_history_list:
+                for item in limited_history:
                     role = "user" if item['role'] == "user" else "model"
                     history_contents.append({"role": role, "parts": [{"text": item['content']}]})
                 
                 # Chama a API do Gemini com o protocolo otimizado (System Instruction + History)
                 response_stream = gemini_client.generate_content(
-                    history_contents, # Somente o histórico da conversa
+                    history_contents, # Somente o histórico limitado da conversa
                     config={
                         "temperature": 0.0,
                         "timeout": 180, # Timeout para tolerar análises longas
