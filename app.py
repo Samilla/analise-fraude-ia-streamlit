@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini SDK (Versão Final Estável)
 # Implementado Streaming e OTIMIZAÇÃO DE PROTOCOLO para resolver erros de Timeout.
 
