@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini SDK (Versão Final Estável)
 # Elimina a LangChain para resolver erros de Output Parsing e Depreciação.
 
@@ -102,21 +103,21 @@ def unzip_and_read_file(uploaded_file):
             os.remove(os.path.abspath(tmp_csv_path)) # Garante a remoção
         return None, None
     
-    # Adiciona a remoção do arquivo no final para limpar o sistema de arquivos
-    if os.path.exists(tmp_csv_path):
-        st.session_state.temp_csv_path_to_delete = tmp_csv_path
-    
-    return None, None
+    return tmp_csv_path, df
 
-def get_specialist_prompt(df_head, temp_csv_path):
+def get_specialist_prompt(df, temp_csv_path):
     """Gera o prompt de sistema para instruir o Gemini como especialista."""
+    # CORREÇÃO CRÍTICA: Enviar APENAS metadados (colunas e tipos) para economizar tokens/tempo
+    col_info = df.dtypes.to_markdown()
+    
     return f"""
     Você é um Multi Agente de IA SUPER ESPECIALISTA em Contabilidade, Análise de Dados e Desenvolvimento Python.
     Sua missão é analisar dados do arquivo CSV localizado em: {temp_csv_path}.
 
     **Contexto do Arquivo:**
-    - O arquivo possui {df_head.shape[0]} linhas e {df_head.shape[1]} colunas.
-    - As primeiras linhas são: {df_head.head(2).to_markdown()}
+    - O arquivo possui {df.shape[0]} linhas e {df.shape[1]} colunas.
+    - **Tipos de Dados:**
+    {col_info}
 
     **Regras OBRIGATÓRIAS (Essencial para a estabilidade e gráficos):**
     1. **Ferramenta Única:** Você tem acesso à biblioteca Pandas.
@@ -172,8 +173,14 @@ def parse_and_display_response(response_text):
         # Separa o texto e o código
         parts = response_text.split(CODE_START, 1)
         text_before = parts[0].strip()
-        code_block = parts[1].split(CODE_END, 1)[0].strip()
-        text_after = parts[1].split(CODE_END, 1)[1].strip() if len(parts[1].split(CODE_END, 1)) > 1 else ""
+        
+        try:
+            code_block = parts[1].split(CODE_END, 1)[0].strip()
+            text_after = parts[1].split(CODE_END, 1)[1].strip() if len(parts[1].split(CODE_END, 1)) > 1 else ""
+        except IndexError:
+            # Caso o código Python esteja no final e não tenha o fechamento ```
+            code_block = parts[1].strip()
+            text_after = ""
 
         # Executa o código Python
         execution_output = execute_python_code(code_block, st.session_state.temp_csv_path)
@@ -227,6 +234,9 @@ if 'report_content' not in st.session_state:
     st.session_state.report_content = ""
 if 'specialist_prompt' not in st.session_state:
     st.session_state.specialist_prompt = ""
+if 'temp_csv_path_to_delete' not in st.session_state:
+    st.session_state.temp_csv_path_to_delete = None
+
 
 # --- Barra Lateral (Upload e Relatório) ---
 with st.sidebar:
