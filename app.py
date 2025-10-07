@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini SDK (Versão Final Estável)
-# Implementado Streaming para resolver erros de Timeout (Erro 429/Comunicação).
+# Implementado Streaming e OTIMIZAÇÃO DE PROTOCOLO para resolver erros de Timeout.
 
 import streamlit as st
 import pandas as pd
@@ -123,7 +123,7 @@ def get_specialist_prompt(df, temp_csv_path):
     3. **Formato:** O código Python para o gráfico deve ser **impresso** no formato de string JSON do Plotly, usando o comando:
        `print(f"<PLOTLY_JSON>{{fig.to_json()}}</PLOTLY_JSON>")`
     4. **Caminho do Arquivo:** **SEMPRE** use `pd.read_csv('{temp_csv_path}')` dentro do código Python que você gerar.
-    5. **Tolerância:** Responda à pergunta do usuário diretamente após gerar o código. Não use raciocínio em etapas ou comandos internos do LangChain que causam erros de parsing.
+    5. **Tolerância:** Responda à pergunta do usuário diretamente após gerar o código. Não use raciocínio em etapas.
     6. **Resumo:** Ao final da sua análise ou do código, forneça um resumo claro e conciso da sua conclusão.
     """
 
@@ -312,15 +312,21 @@ if st.session_state.df is not None and gemini_client:
 
         with st.spinner("Agente de IA está processando..."):
             try:
-                # Constrói o contexto da conversa
-                history_context = "\n".join([f"{item['role']}: {item['content']}" for item in st.session_state.chat_history_list])
-                full_context = st.session_state.specialist_prompt + "\n\n" + history_context
-
-                # Chama a API do Gemini com o contexto completo
+                # Constrói o histórico da conversa no formato de mensagens do Gemini SDK
+                history_contents = []
+                for item in st.session_state.chat_history_list:
+                    role = "user" if item['role'] == "user" else "model"
+                    history_contents.append({"role": role, "parts": [{"text": item['content']}]})
+                
+                # Chama a API do Gemini com o protocolo otimizado (System Instruction + History)
                 response_stream = gemini_client.generate_content(
-                    full_context,
-                    config={"temperature": 0.0, "timeout": 180},
-                    stream=True # CORREÇÃO CRÍTICA: Ativa o streaming
+                    history_contents, # Somente o histórico da conversa
+                    config={
+                        "temperature": 0.0,
+                        "timeout": 180, # Timeout para tolerar análises longas
+                        "system_instruction": st.session_state.specialist_prompt # Instrução como System Instruction
+                    },
+                    stream=True # Ativa o streaming para evitar timeout e melhorar UX
                 )
                 
                 # Exibe a resposta em streaming e constrói o texto completo
@@ -328,8 +334,10 @@ if st.session_state.df is not None and gemini_client:
                 response_placeholder = st.chat_message("assistant").empty()
                 
                 for chunk in response_stream:
-                    full_response_text += chunk.text
-                    response_placeholder.markdown(full_response_text)
+                    # Garantia contra valores nulos (chunks vazios)
+                    if chunk.text:
+                        full_response_text += chunk.text
+                        response_placeholder.markdown(full_response_text)
                 
                 # Adiciona a resposta completa ao histórico
                 st.session_state.chat_history_list.append({"role": "assistant", "content": full_response_text})
