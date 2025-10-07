@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini SDK (Versão Final Estável)
-# Elimina a LangChain para resolver erros de Output Parsing e Depreciação.
+# Implementado Streaming para resolver erros de Timeout (Erro 429/Comunicação).
 
 import streamlit as st
 import pandas as pd
@@ -37,7 +37,6 @@ if not API_KEY:
 def get_gemini_client(api_key, model_name):
     """
     Inicializa e armazena o cliente Gemini na cache para evitar consumo de cota.
-    A temperatura (temperature) é definida APENAS na chamada generate_content.
     """
     if not api_key:
         return None
@@ -45,7 +44,6 @@ def get_gemini_client(api_key, model_name):
         genai.configure(api_key=api_key)
         client = genai.GenerativeModel(
             model_name=model_name
-            # 'temperature' é passada na chamada para evitar erros de compatibilidade do SDK
         )
         return client
     except Exception as e:
@@ -107,7 +105,7 @@ def unzip_and_read_file(uploaded_file):
 
 def get_specialist_prompt(df, temp_csv_path):
     """Gera o prompt de sistema para instruir o Gemini como especialista."""
-    # CORREÇÃO CRÍTICA: Enviar APENAS metadados (colunas e tipos) para economizar tokens/tempo
+    # Envia APENAS metadados (colunas e tipos) para economizar tokens/tempo
     col_info = df.dtypes.to_markdown()
     
     return f"""
@@ -125,7 +123,7 @@ def get_specialist_prompt(df, temp_csv_path):
     3. **Formato:** O código Python para o gráfico deve ser **impresso** no formato de string JSON do Plotly, usando o comando:
        `print(f"<PLOTLY_JSON>{{fig.to_json()}}</PLOTLY_JSON>")`
     4. **Caminho do Arquivo:** **SEMPRE** use `pd.read_csv('{temp_csv_path}')` dentro do código Python que você gerar.
-    5. **Evitar Quebra:** Mantenha as respostas focadas. Não use raciocínio em etapas ou comandos internos do LangChain que causam erros de parsing.
+    5. **Tolerância:** Responda à pergunta do usuário diretamente após gerar o código. Não use raciocínio em etapas ou comandos internos do LangChain que causam erros de parsing.
     6. **Resumo:** Ao final da sua análise ou do código, forneça um resumo claro e conciso da sua conclusão.
     """
 
@@ -234,8 +232,6 @@ if 'report_content' not in st.session_state:
     st.session_state.report_content = ""
 if 'specialist_prompt' not in st.session_state:
     st.session_state.specialist_prompt = ""
-if 'temp_csv_path_to_delete' not in st.session_state:
-    st.session_state.temp_csv_path_to_delete = None
 
 
 # --- Barra Lateral (Upload e Relatório) ---
@@ -321,17 +317,26 @@ if st.session_state.df is not None and gemini_client:
                 full_context = st.session_state.specialist_prompt + "\n\n" + history_context
 
                 # Chama a API do Gemini com o contexto completo
-                response = gemini_client.generate_content(
+                response_stream = gemini_client.generate_content(
                     full_context,
-                    config={"temperature": 0.0, "timeout": 180} # Configuração de precisão e timeout
+                    config={"temperature": 0.0, "timeout": 180},
+                    stream=True # CORREÇÃO CRÍTICA: Ativa o streaming
                 )
-                response_text = response.text
+                
+                # Exibe a resposta em streaming e constrói o texto completo
+                full_response_text = ""
+                response_placeholder = st.chat_message("assistant").empty()
+                
+                for chunk in response_stream:
+                    full_response_text += chunk.text
+                    response_placeholder.markdown(full_response_text)
                 
                 # Adiciona a resposta completa ao histórico
-                st.session_state.chat_history_list.append({"role": "assistant", "content": response_text})
+                st.session_state.chat_history_list.append({"role": "assistant", "content": full_response_text})
 
-                # Processa e exibe a resposta (incluindo código/gráfico)
-                parse_and_display_response(response_text)
+                # Limpa e processa a resposta final (para extrair código/gráfico)
+                response_placeholder.empty()
+                parse_and_display_response(full_response_text)
 
             except Exception as e:
                 st.session_state.chat_history_list.append({"role": "assistant", "content": "Ocorreu um erro na comunicação com a IA. Por favor, tente novamente ou reformule sua pergunta."})
