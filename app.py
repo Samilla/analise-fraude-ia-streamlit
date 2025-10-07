@@ -22,6 +22,7 @@ st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e 
 pio.templates.default = "plotly_white"
 MODEL_NAME = "gemini-2.5-flash"
 MAX_HISTORY_SIZE = 10 
+SAMPLE_ROWS = 100000 # Tamanho máximo para análises estatísticas para evitar timeout
 
 # Tenta obter a chave da API do Gemini do secrets.toml (Streamlit Cloud)
 try:
@@ -104,24 +105,45 @@ def unzip_and_read_file(uploaded_file):
     
     return tmp_csv_path, df
 
-# NOVO: Cache para o DataFrame usado no exec(), eliminando a leitura repetida do disco
 @st.cache_data(show_spinner="Cacheando DataFrame na Memória...")
 def get_execution_df(temp_csv_path):
-    """Lê o DataFrame uma vez e o armazena na cache para execuções rápidas."""
-    # O timeout está aqui para arquivos grandes, mas o cache resolve.
-    return pd.read_csv(temp_csv_path)
+    """
+    Lê o DataFrame e aplica amostragem se for muito grande. 
+    Retorna o DataFrame cacheado e flags de amostragem.
+    """
+    df = pd.read_csv(temp_csv_path)
+    original_rows = df.shape[0]
+    
+    is_sampled = False
+    
+    if original_rows > SAMPLE_ROWS:
+        df = df.sample(n=SAMPLE_ROWS, random_state=42)
+        is_sampled = True
+        
+    return df, is_sampled, original_rows
 
 def get_specialist_prompt(df, temp_csv_path):
     """Gera o prompt de sistema para instruir o Gemini como especialista."""
-    # Envia APENAS metadados (colunas e tipos) para economizar tokens/tempo
+    # O df passado aqui é apenas para metadados (não para o exec)
+    df_temp, is_sampled, original_rows = get_execution_df(temp_csv_path)
+
     col_info = df.dtypes.to_markdown()
+    
+    sampling_info = ""
+    if is_sampled:
+        sampling_info = (
+            f"**ATENÇÃO:** O DataFrame '{df.shape[0]} linhas' está muito grande. "
+            f"Para análises e cálculos, você está usando uma **AMOSTRA ALEATÓRIA de {SAMPLE_ROWS} linhas** do total de {original_rows} linhas, "
+            "para evitar timeouts. Comente que a análise é baseada em uma amostra."
+        )
     
     return f"""
     Você é um Multi Agente de IA SUPER ESPECIALISTA em Contabilidade, Análise de Dados e Desenvolvimento Python.
     Sua missão é analisar dados do arquivo CSV localizado em: {temp_csv_path}.
 
     **Contexto do Arquivo:**
-    - O arquivo possui {df.shape[0]} linhas e {df.shape[1]} colunas.
+    - O arquivo possui {original_rows} linhas e {df.shape[1]} colunas.
+    - **{sampling_info}**
     - **Tipos de Dados:**
     {col_info}
 
@@ -139,14 +161,14 @@ def execute_python_code(code_str, temp_csv_path):
     """Executa código Python gerado pelo LLM em um ambiente seguro."""
     
     # Obtém o DataFrame da cache para execução instantânea
-    df_exec = get_execution_df(st.session_state.temp_csv_path)
+    df_exec, is_sampled, original_rows = get_execution_df(st.session_state.temp_csv_path)
     
     # Define o ambiente de execução com o dataframe lido
     exec_globals = {
         'pd': pd,
         'px': px,
         'plt': None, # Remove matplotlib
-        'df': df_exec, # Usa o DataFrame cacheado
+        'df': df_exec, # Usa o DataFrame cacheado (pequeno)
         'print': print # Permite que o LLM use print para comunicação
     }
     
@@ -274,6 +296,9 @@ if uploaded_file and st.session_state.temp_csv_path is None:
     st.session_state.temp_csv_path, st.session_state.df = unzip_and_read_file(uploaded_file)
     
     if st.session_state.df is not None:
+        # Força o cache do DataFrame reduzido imediatamente
+        get_execution_df(st.session_state.temp_csv_path) 
+        
         st.session_state.specialist_prompt = get_specialist_prompt(st.session_state.df, st.session_state.temp_csv_path)
         st.session_state.chat_history_list.clear() # Limpa o chat ao carregar novo arquivo
         st.success(f"Arquivo '{uploaded_file.name}' carregado e pronto para análise! Pergunte no chat.")
