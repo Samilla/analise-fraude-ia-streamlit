@@ -21,7 +21,6 @@ st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e 
 # --- Constantes e Variáveis Globais ---
 pio.templates.default = "plotly_white"
 MODEL_NAME = "gemini-2.5-flash"
-# Limite o histórico da conversa para evitar timeout (equivale ao ConversationBufferWindowMemory)
 MAX_HISTORY_SIZE = 10 
 
 # Tenta obter a chave da API do Gemini do secrets.toml (Streamlit Cloud)
@@ -38,7 +37,7 @@ if not API_KEY:
 @st.cache_resource
 def get_gemini_client(api_key, model_name):
     """
-    Inicializa e armazena o cliente Gemini na cache para evitar consumo de cota.
+    Inicializa e armazena o cliente Gemini na cache.
     """
     if not api_key:
         return None
@@ -52,7 +51,7 @@ def get_gemini_client(api_key, model_name):
         st.error(f"Erro fatal ao configurar o Gemini SDK. Verifique sua chave de API. Detalhes: {e}")
         return None
 
-# Chame a função cacheada para obter o cliente
+# Inicializa o cliente uma única vez, armazenando-o em um recurso cacheado.
 gemini_client = get_gemini_client(API_KEY, MODEL_NAME)
 
 # --- Funções de Manipulação de Arquivos ---
@@ -61,7 +60,7 @@ gemini_client = get_gemini_client(API_KEY, MODEL_NAME)
 def unzip_and_read_file(uploaded_file):
     """
     Descompacta arquivos ZIP ou GZ, lê o conteúdo CSV e retorna o DataFrame
-    e o caminho temporário do arquivo (necessário para o contexto do prompt).
+    e o caminho temporário do arquivo.
     """
     file_extension = uploaded_file.name.lower().split('.')[-1]
     uploaded_file.seek(0)
@@ -106,9 +105,10 @@ def unzip_and_read_file(uploaded_file):
     return tmp_csv_path, df
 
 # NOVO: Cache para o DataFrame usado no exec(), eliminando a leitura repetida do disco
-@st.cache_data
+@st.cache_data(show_spinner="Cacheando DataFrame na Memória...")
 def get_execution_df(temp_csv_path):
     """Lê o DataFrame uma vez e o armazena na cache para execuções rápidas."""
+    # O timeout está aqui para arquivos grandes, mas o cache resolve.
     return pd.read_csv(temp_csv_path)
 
 def get_specialist_prompt(df, temp_csv_path):
@@ -139,7 +139,7 @@ def execute_python_code(code_str, temp_csv_path):
     """Executa código Python gerado pelo LLM em um ambiente seguro."""
     
     # Obtém o DataFrame da cache para execução instantânea
-    df_exec = get_execution_df(temp_csv_path)
+    df_exec = get_execution_df(st.session_state.temp_csv_path)
     
     # Define o ambiente de execução com o dataframe lido
     exec_globals = {
