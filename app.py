@@ -71,54 +71,190 @@ def unzip_and_read_file(uploaded_file):
     
     return None
 
-# CORREÇÃO 3: Função para criar gráficos automaticamente
-def create_chart_from_query(df, query, response_text):
-    """
-    Cria gráficos automaticamente baseado em palavras-chave na query
-    """
+# CORREÇÃO 3: Sistema inteligente de detecção e geração de gráficos
+def detect_chart_request(query):
+    """Detecta se o usuário quer um gráfico e qual tipo"""
     query_lower = query.lower()
     
-    # Detecta tipo de gráfico solicitado
-    if any(word in query_lower for word in ['gráfico', 'grafico', 'visualiz', 'plot', 'chart']):
-        try:
-            # Gráfico de barras
-            if any(word in query_lower for word in ['barra', 'bar', 'contagem', 'frequência']):
-                # Pega primeira coluna categórica
-                cat_col = df.select_dtypes(include=['object']).columns[0]
-                counts = df[cat_col].value_counts().head(10)
-                fig = px.bar(x=counts.index, y=counts.values, 
-                           labels={'x': cat_col, 'y': 'Contagem'},
-                           title=f'Top 10 - {cat_col}')
-                return fig
+    # Palavras-chave que indicam solicitação de gráfico
+    chart_keywords = ['gráfico', 'grafico', 'visualiz', 'plot', 'chart', 'mostre', 
+                      'exiba', 'desenhe', 'plote', 'faça um gráfico', 'crie um gráfico']
+    
+    wants_chart = any(word in query_lower for word in chart_keywords)
+    
+    if not wants_chart:
+        return None, None
+    
+    # Detecta tipo de gráfico
+    if any(word in query_lower for word in ['barra', 'bar', 'barras', 'contagem', 'frequência', 'top']):
+        return 'bar', None
+    elif any(word in query_lower for word in ['linha', 'line', 'temporal', 'tempo', 'time', 'evolução', 'tendência']):
+        return 'line', None
+    elif any(word in query_lower for word in ['dispersão', 'scatter', 'correlação', 'correlacao', 'relação', 'relacao']):
+        return 'scatter', None
+    elif any(word in query_lower for word in ['histograma', 'histogram', 'distribuição', 'distribuicao']):
+        return 'histogram', None
+    elif any(word in query_lower for word in ['pizza', 'pie', 'proporção', 'proporcao', 'percentual']):
+        return 'pie', None
+    elif any(word in query_lower for word in ['boxplot', 'box', 'caixa', 'outlier']):
+        return 'box', None
+    else:
+        return 'auto', None  # Escolhe automaticamente
+
+def extract_columns_from_query(query, df):
+    """Extrai nomes de colunas mencionadas na query"""
+    columns_found = []
+    query_lower = query.lower()
+    
+    for col in df.columns:
+        if col.lower() in query_lower:
+            columns_found.append(col)
+    
+    return columns_found
+
+def create_chart_from_query(df, query, chart_type=None):
+    """
+    Cria gráficos baseado no tipo detectado e nas colunas do DataFrame
+    """
+    try:
+        # Extrai colunas mencionadas na query
+        mentioned_cols = extract_columns_from_query(query, df)
+        
+        # Separa colunas por tipo
+        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        
+        # Se mencionou colunas específicas, usa elas
+        if mentioned_cols:
+            x_col = mentioned_cols[0] if len(mentioned_cols) > 0 else None
+            y_col = mentioned_cols[1] if len(mentioned_cols) > 1 else None
+        else:
+            x_col = None
+            y_col = None
+        
+        # GRÁFICO DE BARRAS
+        if chart_type == 'bar':
+            if x_col and x_col in categorical_cols:
+                counts = df[x_col].value_counts().head(15)
+            elif categorical_cols:
+                x_col = categorical_cols[0]
+                counts = df[x_col].value_counts().head(15)
+            else:
+                return None
             
-            # Gráfico de linha (temporal)
-            elif any(word in query_lower for word in ['linha', 'line', 'tempo', 'time', 'tendência']):
-                # Procura coluna de data ou numérica sequencial
-                numeric_cols = df.select_dtypes(include=['number']).columns
-                if len(numeric_cols) >= 2:
-                    fig = px.line(df.head(100), x=numeric_cols[0], y=numeric_cols[1],
-                                title=f'{numeric_cols[1]} ao longo de {numeric_cols[0]}')
-                    return fig
+            fig = px.bar(
+                x=counts.index, 
+                y=counts.values,
+                labels={'x': x_col, 'y': 'Contagem'},
+                title=f'📊 Distribuição de {x_col}',
+                color=counts.values,
+                color_continuous_scale='Blues'
+            )
+            fig.update_layout(showlegend=False, xaxis_tickangle=-45)
+            return fig
+        
+        # GRÁFICO DE LINHA
+        elif chart_type == 'line':
+            if x_col and y_col and x_col in numeric_cols and y_col in numeric_cols:
+                data = df[[x_col, y_col]].head(500)
+            elif len(numeric_cols) >= 2:
+                x_col, y_col = numeric_cols[0], numeric_cols[1]
+                data = df[[x_col, y_col]].head(500)
+            else:
+                return None
             
-            # Gráfico de dispersão (correlação)
-            elif any(word in query_lower for word in ['dispersão', 'scatter', 'correlação', 'relação']):
-                numeric_cols = df.select_dtypes(include=['number']).columns
-                if len(numeric_cols) >= 2:
-                    fig = px.scatter(df.head(1000), x=numeric_cols[0], y=numeric_cols[1],
-                                   title=f'Relação entre {numeric_cols[0]} e {numeric_cols[1]}')
-                    return fig
+            fig = px.line(
+                data, 
+                x=x_col, 
+                y=y_col,
+                title=f'📈 {y_col} ao longo de {x_col}',
+                markers=True
+            )
+            return fig
+        
+        # GRÁFICO DE DISPERSÃO
+        elif chart_type == 'scatter':
+            if x_col and y_col and x_col in numeric_cols and y_col in numeric_cols:
+                data = df[[x_col, y_col]].head(1000)
+            elif len(numeric_cols) >= 2:
+                x_col, y_col = numeric_cols[0], numeric_cols[1]
+                data = df[[x_col, y_col]].head(1000)
+            else:
+                return None
             
-            # Histograma
-            elif any(word in query_lower for word in ['histograma', 'histogram', 'distribuição']):
-                numeric_cols = df.select_dtypes(include=['number']).columns
-                if len(numeric_cols) >= 1:
-                    fig = px.histogram(df, x=numeric_cols[0],
-                                     title=f'Distribuição de {numeric_cols[0]}')
-                    return fig
-                    
-        except Exception as e:
-            st.warning(f"Não foi possível gerar o gráfico automaticamente: {e}")
-            return None
+            fig = px.scatter(
+                data,
+                x=x_col,
+                y=y_col,
+                title=f'🔵 Relação entre {x_col} e {y_col}',
+                opacity=0.6,
+                color=data[y_col] if y_col else None
+            )
+            return fig
+        
+        # HISTOGRAMA
+        elif chart_type == 'histogram':
+            if x_col and x_col in numeric_cols:
+                col = x_col
+            elif numeric_cols:
+                col = numeric_cols[0]
+            else:
+                return None
+            
+            fig = px.histogram(
+                df,
+                x=col,
+                title=f'📊 Distribuição de {col}',
+                nbins=30,
+                color_discrete_sequence=['#636EFA']
+            )
+            return fig
+        
+        # GRÁFICO DE PIZZA
+        elif chart_type == 'pie':
+            if x_col and x_col in categorical_cols:
+                col = x_col
+            elif categorical_cols:
+                col = categorical_cols[0]
+            else:
+                return None
+            
+            counts = df[col].value_counts().head(10)
+            fig = px.pie(
+                values=counts.values,
+                names=counts.index,
+                title=f'🥧 Proporção de {col}'
+            )
+            return fig
+        
+        # BOXPLOT
+        elif chart_type == 'box':
+            if y_col and y_col in numeric_cols:
+                col = y_col
+            elif numeric_cols:
+                col = numeric_cols[0]
+            else:
+                return None
+            
+            fig = px.box(
+                df,
+                y=col,
+                title=f'📦 Boxplot de {col}'
+            )
+            return fig
+        
+        # AUTO: Escolhe o melhor gráfico baseado nos dados
+        elif chart_type == 'auto':
+            if len(categorical_cols) > 0:
+                return create_chart_from_query(df, query, 'bar')
+            elif len(numeric_cols) >= 2:
+                return create_chart_from_query(df, query, 'scatter')
+            elif len(numeric_cols) == 1:
+                return create_chart_from_query(df, query, 'histogram')
+        
+    except Exception as e:
+        st.warning(f"⚠️ Erro ao gerar gráfico: {e}")
+        return None
     
     return None
 
@@ -137,7 +273,7 @@ REGRAS IMPORTANTES:
 1. Seja CONCISO e DIRETO - respostas com no máximo 3 parágrafos
 2. Use APENAS os dados do DataFrame fornecido
 3. Para cálculos, use pandas diretamente (df.groupby, df.corr, etc)
-4. NÃO tente criar gráficos - apenas descreva os dados
+4. Crie gráficos se solicitado - gere a imagem do gráfico 
 5. Formate números com 2 casas decimais
 
 ANÁLISES PERMITIDAS:
