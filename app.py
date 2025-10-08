@@ -22,7 +22,7 @@ st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e 
 pio.templates.default = "plotly_white"
 
 # CORREÇÃO 1: Modelo Gemini estável (2.5-flash pode estar instável)
-MODEL_NAME = "gemini-1.5-flash"  # Modelo mais estável
+MODEL_NAME = "gemini-2.5-flash"  # Modelo mais estável
 
 # Tenta obter a chave da API
 try:
