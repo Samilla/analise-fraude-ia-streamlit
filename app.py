@@ -318,7 +318,7 @@ if report_btn and st.session_state.df is not None:
         try:
             response = gemini_client.generate_content(
                 full_prompt, 
-                config={"temperature": 0.0, "timeout": 180} # Configuração de precisão e timeout
+                config={"temperature": 0.0} # Configuração de precisão
             )
             st.session_state.report_content = response.text
             st.success("Relatório gerado com sucesso! Use o botão 'Baixar Relatório (Markdown)' na lateral.")
@@ -363,7 +363,6 @@ if st.session_state.df is not None and gemini_client:
                     history_contents, # Somente o histórico limitado da conversa
                     config={
                         "temperature": 0.0,
-                        "timeout": 180, # Timeout para tolerar análises longas
                         "system_instruction": st.session_state.specialist_prompt # Instrução como System Instruction
                     },
                     stream=True # Ativa o streaming para evitar timeout e melhorar UX
