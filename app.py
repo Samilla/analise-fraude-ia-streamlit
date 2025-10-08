@@ -315,13 +315,9 @@ Resposta: print(df['X'].mean())"""
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
             prefix=analyst_prompt,
             allow_dangerous_code=True,
-            max_iterations=4,  # Aumentado para dar mais chances
+            max_iterations=4,
             max_execution_time=45,
-            handle_parsing_errors=True,  # CRÍTICO: Ativa tratamento de erros
-            agent_executor_kwargs={
-                "handle_parsing_errors": True,
-                "return_intermediate_steps": False
-            }
+            handle_parsing_errors=True  # Ativa tratamento de erros
         )
         
         return agent
