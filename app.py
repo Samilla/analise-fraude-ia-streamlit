@@ -1,313 +1,500 @@
-# -*- coding: utf-8 -*-
-# Agente de Análise de Dados e Detecção de Fraudes com Gemini SDK
-# Versão com Ferramenta de Diagnóstico de Modelo e Prompt Reforçado
-
 import streamlit as st
 import pandas as pd
 import os
 import tempfile
 import zipfile
 import gzip
-import io
 import json
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.agents.agent_types import AgentType
+from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
+from langchain.memory import ConversationBufferWindowMemory
+from langchain.callbacks import get_openai_callback
 import plotly.express as px
+import plotly.graph_objects as go
 import plotly.io as pio
-import google.generativeai as genai
-import traceback
+import hashlib
 
 # --- Configurações Iniciais do Streamlit ---
-st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal (Diagnóstico)")
+st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e de Fraudes")
 
 # --- Constantes e Variáveis Globais ---
 pio.templates.default = "plotly_white"
-MODEL_NAME = "gemini-2.5-flash"
-MAX_HISTORY_SIZE = 8
-SAMPLE_ROWS = 100000
 
-# --- Chave de API ---
+# CORREÇÃO 1: Modelo Gemini 2.5 Flash
+MODEL_NAME = "gemini-2.5-flash"  # Modelo mais recente
+
+# Tenta obter a chave da API
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
 except (KeyError, AttributeError):
     API_KEY = os.environ.get("GEMINI_KEY", "")
 
 if not API_KEY:
-    st.error("ERRO: Chave da API do Gemini não encontrada. Configure-a em .streamlit/secrets.toml.")
-    st.stop()
+    st.error("ERRO: Chave da API do Gemini não encontrada.")
 
-# --- Inicialização e Diagnóstico do Gemini ---
-try:
-    genai.configure(api_key=API_KEY)
-except Exception as e:
-    st.error(f"Erro fatal ao configurar o Gemini SDK com sua chave: {e}")
-    st.stop()
+# CORREÇÃO 2: Cache para respostas (economia de API)
+@st.cache_data(ttl=3600)
+def cache_query_response(query_hash, _df):
+    """Cache de respostas para economizar chamadas à API"""
+    return None
 
-@st.cache_resource
-def verify_model_availability(model_name):
-    """Lista os modelos disponíveis e verifica se o modelo desejado é compatível."""
-    try:
-        st.write("🔍 Verificando modelos disponíveis para sua chave de API...")
-        available_models = [m for m in genai.list_models() if model_name in m.name and 'generateContent' in m.supported_generation_methods]
-        
-        with st.expander("Clique para ver todos os modelos detectados na sua conta"):
-            all_models_info = [{"Nome": m.name, "Métodos Suportados": m.supported_generation_methods} for m in genai.list_models()]
-            st.json(all_models_info)
-
-        if available_models:
-            st.success(f"✅ Modelo '{available_models[0].name}' encontrado e pronto para uso!")
-            return genai.GenerativeModel(model_name=available_models[0].name)
-        else:
-            st.error(f"❌ ERRO CRÍTICO: O modelo '{model_name}' (ou uma variante) não foi encontrado na sua conta.")
-            st.warning("**AÇÕES RECOMENDADAS:**")
-            st.markdown("""
-                1.  **Verifique se a API 'Vertex AI' está ativada** no seu projeto Google Cloud.
-                2.  **Confirme se o Faturamento (Billing)** está habilitado para este projeto.
-            """)
-            return None
-    except Exception as e:
-        st.error(f"Falha ao comunicar com a API do Google para listar modelos. Detalhes: {e}")
-        return None
-
-gemini_client = verify_model_availability(MODEL_NAME)
-if not gemini_client:
-    st.stop()
-
-# --- Funções de Manipulação de Arquivos (Sem alterações) ---
-@st.cache_data
+# --- Funções de Manipulação de Arquivos ---
 def unzip_and_read_file(uploaded_file):
-    """Descompacta arquivos, lê o CSV e retorna o DataFrame e o caminho temporário."""
+    """Descompacta e lê arquivos CSV, ZIP ou GZ"""
     file_extension = uploaded_file.name.lower().split('.')[-1]
     uploaded_file.seek(0)
-
+    
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
-            tmp_csv_path = tmp_file.name
-
         if file_extension == 'zip':
             with zipfile.ZipFile(uploaded_file, 'r') as zf:
                 csv_files = [name for name in zf.namelist() if name.endswith('.csv')]
                 if not csv_files:
                     st.error("Nenhum arquivo CSV encontrado dentro do ZIP.")
-                    return None, None
+                    return None
                 with zf.open(csv_files[0]) as csv_file:
                     df = pd.read_csv(csv_file)
-                    df.to_csv(tmp_csv_path, index=False)
-                    return tmp_csv_path, df
-        elif file_extension in ['gz', 'gzip']:
-            with gzip.open(uploaded_file, 'rt', encoding='utf-8') as gz_file:
+                    return df
+                    
+        elif uploaded_file.name.endswith(('.gz', '.gzip')):
+            with gzip.open(uploaded_file, 'rt') as gz_file:
                 df = pd.read_csv(gz_file)
-                df.to_csv(tmp_csv_path, index=False)
-                return tmp_csv_path, df
+                return df
+                
         elif file_extension == 'csv':
             df = pd.read_csv(uploaded_file)
-            df.to_csv(tmp_csv_path, index=False)
-            return tmp_csv_path, df
+            return df
+            
     except Exception as e:
         st.error(f"Erro ao processar o arquivo: {e}")
-        return None, None
-    return None, None
-
-@st.cache_data(show_spinner="Analisando e cacheando DataFrame...")
-def get_sampled_df_info(temp_csv_path):
-    """Lê o DataFrame, aplica amostragem se necessário e retorna metadados."""
-    df = pd.read_csv(temp_csv_path)
-    original_rows = len(df)
-    is_sampled = False
-    if original_rows > SAMPLE_ROWS:
-        df_sampled = df.sample(n=SAMPLE_ROWS, random_state=42)
-        is_sampled = True
-        return df_sampled, is_sampled, original_rows, df.dtypes.to_markdown()
-    return df, is_sampled, original_rows, df.dtypes.to_markdown()
-
-# --- Lógica do Agente ---
-
-## ALTERAÇÃO 1: Prompt de sistema muito mais rígido e claro.
-def get_specialist_prompt(is_sampled, original_rows, col_info):
-    """Gera o prompt de sistema para instruir a IA."""
-    sampling_info = ""
-    if is_sampled:
-        sampling_info = (
-            f"**ATENÇÃO:** O DataFrame original é muito grande ({original_rows} linhas). "
-            f"Para performance, seu código será executado em uma **AMOSTRA ALEATÓRIA de {SAMPLE_ROWS} linhas**. "
-            "Sempre mencione em sua análise que os resultados são baseados nesta amostragem."
-        )
-
-    return f"""
-    Você é um Multi Agente de IA, especialista em Contabilidade, Análise de Dados e Python.
-
-    **REGRAS FUNDAMENTAIS E INQUEBRÁVEIS:**
-    1.  **O DataFrame já existe:** Um DataFrame do Pandas já foi carregado e está disponível na variável `df`.
-    2.  **NUNCA LEIA ARQUIVOS:** Você está **PROIBIDO** de usar `pd.read_csv()`, `open()`, ou qualquer outra função de leitura de arquivo. Todo o seu código deve operar **DIRETAMENTE** na variável `df`.
-    3.  **USE `df` SEMPRE:** Todas as suas operações, análises e gráficos devem usar a variável `df`. Exemplo: `df.describe()`, `px.histogram(df, ...)`.
-
-    **Contexto do DataFrame `df`:**
-    - O DataFrame `df` possui {original_rows} linhas no total.
-    - {sampling_info}
-    - Estrutura das colunas (Tipos de Dados):
-    {col_info}
-
-    **REGRAS PARA GERAR GRÁFICOS:**
-    1.  **Ferramentas:** Use apenas `pandas as pd` e `plotly.express as px`.
-    2.  **SAÍDA OBRIGATÓRIA:** O objeto do gráfico DEVE ser atribuído a uma variável chamada `fig`.
-        - Exemplo CORRETO: `fig = px.histogram(df, x='valor_total')`
-        - Exemplo INCORRETO: `px.histogram(df, x='valor_total').show()`
+        return None
     
-    Responda textualmente à pergunta do usuário. Se precisar de código para a análise, coloque-o em um bloco ```python ... ```.
-    """
+    return None
 
-def execute_python_code(code_str, temp_csv_path):
+# CORREÇÃO 3: Sistema inteligente de detecção e geração de gráficos
+def detect_chart_request(query):
+    """Detecta se o usuário quer um gráfico e qual tipo"""
+    query_lower = query.lower()
+    
+    # IMPORTANTE: Palavras que NÃO indicam gráfico (queries de informação)
+    info_keywords = ['coluna', 'colunas', 'linhas', 'registros', 'quantas', 'quantos', 
+                     'primeiras', 'últimas', 'tipo', 'tipos', 'estrutura', 'formato',
+                     'nome', 'nomes', 'lista', 'listar', 'informações', 'informacao']
+    
+    # Se for uma query de informação, NÃO gera gráfico
+    if any(word in query_lower for word in info_keywords):
+        # Exceção: se explicitamente pedir gráfico junto
+        if not any(word in query_lower for word in ['gráfico', 'grafico', 'plot', 'chart', 'visualiz']):
+            return None, None
+    
+    # Palavras-chave que indicam solicitação de gráfico (precisa ser EXPLÍCITO)
+    chart_keywords = ['gráfico', 'grafico', 'visualiz', 'plot', 'plote', 'chart', 
+                      'desenhe', 'crie um gráfico', 'faça um gráfico', 'gere um gráfico']
+    
+    wants_chart = any(word in query_lower for word in chart_keywords)
+    
+    if not wants_chart:
+        return None, None
+    
+    # Detecta tipo de gráfico
+    if any(word in query_lower for word in ['barra', 'bar', 'barras', 'contagem', 'frequência', 'top']):
+        return 'bar', None
+    elif any(word in query_lower for word in ['linha', 'line', 'temporal', 'tempo', 'time', 'evolução', 'tendência']):
+        return 'line', None
+    elif any(word in query_lower for word in ['dispersão', 'scatter', 'correlação', 'correlacao', 'relação', 'relacao']):
+        return 'scatter', None
+    elif any(word in query_lower for word in ['histograma', 'histogram', 'distribuição', 'distribuicao']):
+        return 'histogram', None
+    elif any(word in query_lower for word in ['pizza', 'pie', 'proporção', 'proporcao', 'percentual']):
+        return 'pie', None
+    elif any(word in query_lower for word in ['boxplot', 'box', 'caixa', 'outlier']):
+        return 'box', None
+    else:
+        return 'auto', None  # Escolhe automaticamente
+
+def extract_columns_from_query(query, df):
+    """Extrai nomes de colunas mencionadas na query"""
+    columns_found = []
+    query_lower = query.lower()
+    
+    for col in df.columns:
+        if col.lower() in query_lower:
+            columns_found.append(col)
+    
+    return columns_found
+
+def create_chart_from_query(df, query, chart_type=None):
     """
-    Executa código Python gerado pelo LLM em um ambiente seguro.
-    Retorna uma tupla: (output_text, figure_object).
+    Cria gráficos baseado no tipo detectado e nas colunas do DataFrame
     """
     try:
-        df_exec, _, _, _ = get_sampled_df_info(temp_csv_path)
+        # Extrai colunas mencionadas na query
+        mentioned_cols = extract_columns_from_query(query, df)
         
-        local_scope = {'df': df_exec, 'pd': pd, 'px': px}
-        output_buffer = io.StringIO()
+        # Separa colunas por tipo
+        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
         
-        import sys
-        original_stdout = sys.stdout
-        sys.stdout = output_buffer
+        # Se mencionou colunas específicas, usa elas
+        if mentioned_cols:
+            x_col = mentioned_cols[0] if len(mentioned_cols) > 0 else None
+            y_col = mentioned_cols[1] if len(mentioned_cols) > 1 else None
+        else:
+            x_col = None
+            y_col = None
         
-        exec(code_str, {}, local_scope)
+        # GRÁFICO DE BARRAS
+        if chart_type == 'bar':
+            if x_col and x_col in categorical_cols:
+                counts = df[x_col].value_counts().head(15)
+            elif categorical_cols:
+                x_col = categorical_cols[0]
+                counts = df[x_col].value_counts().head(15)
+            else:
+                return None
+            
+            fig = px.bar(
+                x=counts.index, 
+                y=counts.values,
+                labels={'x': x_col, 'y': 'Contagem'},
+                title=f'📊 Distribuição de {x_col}',
+                color=counts.values,
+                color_continuous_scale='Blues'
+            )
+            fig.update_layout(showlegend=False, xaxis_tickangle=-45)
+            return fig
         
-        sys.stdout = original_stdout
+        # GRÁFICO DE LINHA
+        elif chart_type == 'line':
+            if x_col and y_col and x_col in numeric_cols and y_col in numeric_cols:
+                data = df[[x_col, y_col]].head(500)
+            elif len(numeric_cols) >= 2:
+                x_col, y_col = numeric_cols[0], numeric_cols[1]
+                data = df[[x_col, y_col]].head(500)
+            else:
+                return None
+            
+            fig = px.line(
+                data, 
+                x=x_col, 
+                y=y_col,
+                title=f'📈 {y_col} ao longo de {x_col}',
+                markers=True
+            )
+            return fig
         
-        text_output = output_buffer.getvalue()
-        fig = local_scope.get('fig', None)
+        # GRÁFICO DE DISPERSÃO
+        elif chart_type == 'scatter':
+            if x_col and y_col and x_col in numeric_cols and y_col in numeric_cols:
+                data = df[[x_col, y_col]].head(1000)
+            elif len(numeric_cols) >= 2:
+                x_col, y_col = numeric_cols[0], numeric_cols[1]
+                data = df[[x_col, y_col]].head(1000)
+            else:
+                return None
+            
+            fig = px.scatter(
+                data,
+                x=x_col,
+                y=y_col,
+                title=f'🔵 Relação entre {x_col} e {y_col}',
+                opacity=0.6,
+                color=data[y_col] if y_col else None
+            )
+            return fig
         
-        return text_output, fig
+        # HISTOGRAMA
+        elif chart_type == 'histogram':
+            if x_col and x_col in numeric_cols:
+                col = x_col
+            elif numeric_cols:
+                col = numeric_cols[0]
+            else:
+                return None
+            
+            fig = px.histogram(
+                df,
+                x=col,
+                title=f'📊 Distribuição de {col}',
+                nbins=30,
+                color_discrete_sequence=['#636EFA']
+            )
+            return fig
+        
+        # GRÁFICO DE PIZZA
+        elif chart_type == 'pie':
+            if x_col and x_col in categorical_cols:
+                col = x_col
+            elif categorical_cols:
+                col = categorical_cols[0]
+            else:
+                return None
+            
+            counts = df[col].value_counts().head(10)
+            fig = px.pie(
+                values=counts.values,
+                names=counts.index,
+                title=f'🥧 Proporção de {col}'
+            )
+            return fig
+        
+        # BOXPLOT
+        elif chart_type == 'box':
+            if y_col and y_col in numeric_cols:
+                col = y_col
+            elif numeric_cols:
+                col = numeric_cols[0]
+            else:
+                return None
+            
+            fig = px.box(
+                df,
+                y=col,
+                title=f'📦 Boxplot de {col}'
+            )
+            return fig
+        
+        # AUTO: Escolhe o melhor gráfico baseado nos dados
+        elif chart_type == 'auto':
+            if len(categorical_cols) > 0:
+                return create_chart_from_query(df, query, 'bar')
+            elif len(numeric_cols) >= 2:
+                return create_chart_from_query(df, query, 'scatter')
+            elif len(numeric_cols) == 1:
+                return create_chart_from_query(df, query, 'histogram')
         
     except Exception as e:
-        if 'original_stdout' in locals():
-            sys.stdout = original_stdout
-        error_message = f"ERRO DE EXECUÇÃO PYTHON:\n{e}\n\nTraceback:\n{traceback.format_exc()}"
-        return error_message, None
-
-## ALTERAÇÃO 2: Lógica de exibição da saída do código aprimorada.
-def parse_and_display_response(full_response_text):
-    """
-    Analisa a resposta, extrai e executa código Python e renderiza o gráfico/texto.
-    """
-    text_part = full_response_text
-    code_part = None
+        st.warning(f"⚠️ Erro ao gerar gráfico: {e}")
+        return None
     
-    if "```python" in full_response_text:
-        parts = full_response_text.split("```python", 1)
-        text_part = parts[0].strip()
-        code_part = parts[1].split("```", 1)[0].strip()
+    return None
 
-    if text_part:
-        st.markdown(text_part)
+# --- Funções do Agente ---
+@st.cache_resource
+def load_llm_and_agent(_df):
+    """
+    CORREÇÃO 4: Usa Pandas Agent ao invés de CSV Agent
+    Permite execução de código Python para análises complexas
+    """
+    
+    # CORREÇÃO: Prompt simplificado que força execução de código
+    analyst_prompt = """Você é um assistente Python especializado em análise de dados.
 
-    if code_part:
-        with st.expander("Ver Código Executado"):
-            st.code(code_part, language='python')
+REGRAS OBRIGATÓRIAS:
+1. SEMPRE execute código Python para responder
+2. NUNCA retorne apenas o código, EXECUTE-O
+3. Use 'df' como nome do DataFrame
+4. Seja direto e objetivo
+
+Quando o usuário perguntar algo, você DEVE:
+- Executar código Python
+- Retornar o resultado da execução
+- NÃO apenas mostrar o código
+
+IMPORTANTE: Use python_repl_ast para executar o código."""
+
+    try:
+        llm = ChatGoogleGenerativeAI(
+            model=MODEL_NAME,
+            google_api_key=API_KEY,
+            temperature=0.1,  # Baixa temperatura = respostas mais consistentes
+            max_output_tokens=800,  # CORREÇÃO 5: Limita tokens para economizar
+            timeout=60
+        )
         
-        with st.spinner("Executando análise..."):
-            text_output, fig_object = execute_python_code(code_part, st.session_state.temp_csv_path)
+        # CORREÇÃO 6: Configuração robusta do agente com tratamento de erros
+        agent = create_pandas_dataframe_agent(
+            llm=llm,
+            df=_df,
+            verbose=True,
+            agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+            prefix=analyst_prompt,
+            allow_dangerous_code=True,
+            max_iterations=4,
+            max_execution_time=45,
+            handle_parsing_errors=True  # Ativa tratamento de erros
+        )
+        
+        return agent
+        
+    except Exception as e:
+        st.error(f"Erro ao criar agente: {e}")
+        return None
 
-            # Só exibe a "Saída" se houver algo para mostrar (ignora strings vazias ou só com espaços)
-            if text_output.strip() and "ERRO" not in text_output:
-                st.info("Saída da Execução:")
-                st.text(text_output)
-            
-            if fig_object:
-                st.success("Gráfico gerado com sucesso!")
-                st.plotly_chart(fig_object, use_container_width=True)
-            
-            # Garante que o erro seja exibido claramente
-            if "ERRO DE EXECUÇÃO PYTHON" in text_output:
-                st.error(text_output)
+# CORREÇÃO 8: Sistema de cache de queries
+def get_query_hash(query, df_shape):
+    """Gera hash único para a query"""
+    query_str = f"{query}_{df_shape}"
+    return hashlib.md5(query_str.encode()).hexdigest()
 
 # --- Layout e Interface ---
-st.title("🤖 Multi Agente de Análise Fiscal (com Diagnóstico)")
+st.title("🤖 Multi Agente de Análise Fiscal e de Fraudes")
 st.markdown("---")
 
-# Inicialização de estado
-if 'temp_csv_path' not in st.session_state:
-    st.session_state.temp_csv_path = None
-if 'df_metadata' not in st.session_state:
-    st.session_state.df_metadata = {}
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
+# Inicialização de estados
+if 'data_agent' not in st.session_state:
+    st.session_state.data_agent = None
+if 'df' not in st.session_state:
+    st.session_state.df = None
+if 'chat_history_list' not in st.session_state:
+    st.session_state.chat_history_list = []
+if 'report_content' not in st.session_state:
+    st.session_state.report_content = ""
+if 'query_cache' not in st.session_state:
+    st.session_state.query_cache = {}
+if 'api_calls_count' not in st.session_state:
+    st.session_state.api_calls_count = 0
 
 # --- Barra Lateral ---
 with st.sidebar:
-    st.header("⚙️ 1. Configuração da Análise")
+    st.header("⚙️ Configurações")
+    
+    # Contador de chamadas API
+    st.metric("Chamadas à API", st.session_state.api_calls_count)
+    
+    # Upload
     uploaded_file = st.file_uploader(
-        "Carregue seu arquivo (CSV, ZIP, GZ):",
+        "Carregue seu arquivo:",
         type=['csv', 'zip', 'gz'],
         key="file_uploader"
     )
+    
+    # Botão de relatório
+    st.subheader("📊 Relatório")
+    report_btn = st.button("Gerar Relatório Completo", use_container_width=True)
+    
+    # Download
+    if st.session_state.report_content:
+        st.download_button(
+            label="⬇️ Baixar Relatório",
+            data=st.session_state.report_content,
+            file_name="relatorio_analise.md",
+            mime="text/markdown",
+            use_container_width=True
+        )
+    
+    # Botão para limpar cache
+    if st.button("🔄 Limpar Cache", use_container_width=True):
+        st.session_state.query_cache = {}
+        st.session_state.api_calls_count = 0
+        st.cache_data.clear()
+        st.success("Cache limpo!")
 
 # --- Processamento do Arquivo ---
-if uploaded_file and not st.session_state.temp_csv_path:
-    with st.spinner("Processando e analisando o arquivo..."):
-        temp_path, _ = unzip_and_read_file(uploaded_file)
-        if temp_path:
-            st.session_state.temp_csv_path = temp_path
-            _, is_sampled, original_rows, col_info = get_sampled_df_info(temp_path)
-            st.session_state.df_metadata = {
-                "is_sampled": is_sampled,
-                "original_rows": original_rows,
-                "col_info": col_info
-            }
-            st.session_state.chat_history = []
-            st.success(f"Arquivo '{uploaded_file.name}' carregado. {original_rows} linhas encontradas.")
-            st.rerun()
-        else:
-            st.error("Falha ao carregar o arquivo.")
-
-# --- Interface Principal ---
-if not st.session_state.temp_csv_path:
-    st.info("⚠️ Por favor, carregue um arquivo na barra lateral para iniciar a análise.")
-else:
-    for item in st.session_state.chat_history:
-        with st.chat_message(item['role']):
-            if item['role'] == 'assistant':
-                parse_and_display_response(item['content'])
-            else:
-                st.markdown(item['content'])
+if uploaded_file and st.session_state.df is None:
+    df = unzip_and_read_file(uploaded_file)
     
-    if prompt := st.chat_input("Faça sua pergunta ao Agente..."):
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    if df is not None:
+        st.session_state.df = df
+        
+        with st.spinner("Inicializando agente..."):
+            st.session_state.data_agent = load_llm_and_agent(df)
+        
+        if st.session_state.data_agent:
+            st.success(f"✅ Arquivo '{uploaded_file.name}' carregado!")
+            st.info(f"📊 Dataset: {df.shape[0]} linhas × {df.shape[1]} colunas")
+            
+            # Preview dos dados
+            with st.expander("👀 Preview dos Dados"):
+                st.dataframe(df.head(10), use_container_width=True)
+                st.write("**Colunas:**", ", ".join(df.columns.tolist()))
 
-        with st.chat_message("assistant"):
-            with st.spinner("O Agente está pensando..."):
+# --- Processamento do Relatório ---
+if report_btn and st.session_state.data_agent and st.session_state.df is not None:
+    report_prompt = """Gere um relatório executivo conciso com:
+
+1. **Resumo dos Dados** (3 linhas)
+2. **Principais Estatísticas** (métricas chave)
+3. **Insights Importantes** (2-3 descobertas)
+4. **Recomendações** (2-3 ações)
+
+Use Markdown. Seja BREVE."""
+
+    with st.spinner("Gerando relatório..."):
+        try:
+            response = st.session_state.data_agent.invoke({"input": report_prompt})
+            st.session_state.report_content = response['output']
+            st.session_state.api_calls_count += 1
+            st.success("✅ Relatório gerado!")
+        except Exception as e:
+            st.error(f"Erro ao gerar relatório: {e}")
+
+# --- Interface de Chat ---
+for role, message in st.session_state.chat_history_list:
+    if role == "user":
+        st.chat_message("user").markdown(message)
+    else:
+        st.chat_message("assistant").markdown(message)
+
+# Campo de entrada
+if st.session_state.data_agent and st.session_state.df is not None:
+    if prompt := st.chat_input("Faça sua pergunta..."):
+        # Adiciona pergunta ao histórico
+        st.session_state.chat_history_list.append(("user", prompt))
+        st.chat_message("user").markdown(prompt)
+        
+        # Verifica cache
+        query_hash = get_query_hash(prompt, st.session_state.df.shape)
+        
+        if query_hash in st.session_state.query_cache:
+            response_text = st.session_state.query_cache[query_hash]
+            st.info("💾 Resposta do cache (economia de API)")
+        else:
+            with st.spinner("🤖 Processando..."):
                 try:
-                    system_prompt = get_specialist_prompt(**st.session_state.df_metadata)
-
-                    gemini_history = []
-                    # Limita o histórico para otimizar a chamada
-                    for item in st.session_state.chat_history[-MAX_HISTORY_SIZE:]:
-                        role = "user" if item['role'] == 'user' else 'model'
-                        # Envia apenas o texto, sem o código, para economizar tokens
-                        content_text = item['content'].split("```python")[0].strip()
-                        gemini_history.append({'role': role, 'parts': [{'text': content_text}]})
+                    # CORREÇÃO: Tratamento robusto de erros
+                    response = st.session_state.data_agent.invoke({
+                        "input": prompt,
+                        "handle_parsing_errors": True
+                    })
                     
-                    if len(gemini_history) > 1 and gemini_history[-2]['role'] == 'user':
-                        gemini_history.pop(-2)
-
-
-                    response = gemini_client.generate_content(
-                        gemini_history,
-                        generation_config=genai.types.GenerationConfig(temperature=0.0),
-                        request_options={'timeout': 300},
-                        system_instruction=system_prompt 
-                    )
+                    # Extrai o output (pode vir em diferentes formatos)
+                    if isinstance(response, dict):
+                        response_text = response.get('output', str(response))
+                    else:
+                        response_text = str(response)
                     
-                    full_response_text = response.text
+                    # Limpa a resposta
+                    response_text = response_text.strip()
                     
-                    st.session_state.chat_history.append({"role": "assistant", "content": full_response_text})
+                    # Salva no cache
+                    st.session_state.query_cache[query_hash] = response_text
+                    st.session_state.api_calls_count += 1
                     
-                    parse_and_display_response(full_response_text)
-
                 except Exception as e:
-                    error_msg = f"❌ Ocorreu um erro na comunicação com a IA: {e}"
-                    st.error(error_msg)
-                    st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
-                    print(f"Erro na execução da API: {e}\n{traceback.format_exc()}")
+                    error_msg = str(e)
+                    
+                    # Trata erros de parsing especificamente
+                    if "parsing error" in error_msg.lower():
+                        response_text = """⚠️ **Erro de interpretação da resposta.**
+                        
+Tente reformular sua pergunta de forma mais direta, como:
+- "Quantas linhas tem o dataset?"
+- "Mostre as 5 primeiras linhas"
+- "Qual a média da coluna X?"
+- "Quais são as colunas?"
+"""
+                    else:
+                        response_text = f"⚠️ Erro ao processar: {error_msg[:200]}"
+                    
+                    st.error(response_text)
+        
+        # Adiciona resposta ao histórico
+        st.session_state.chat_history_list.append(("agent", response_text))
+        st.chat_message("assistant").markdown(response_text)
+        
+        # CORREÇÃO 9: Detecta e gera gráfico se solicitado
+        chart_type, _ = detect_chart_request(prompt)
+        
+        if chart_type:
+            st.info("📊 Gerando visualização...")
+            chart = create_chart_from_query(st.session_state.df, prompt, chart_type)
+            
+            if chart:
+                st.plotly_chart(chart, use_container_width=True)
+                st.success("✅ Gráfico gerado com sucesso!")
+            else:
+                st.warning("⚠️ Não foi possível gerar o gráfico. Tente especificar as colunas na sua pergunta.")
 
+else:
+    st.info("⚠️ Carregue um arquivo CSV, ZIP ou GZ para iniciar.")
