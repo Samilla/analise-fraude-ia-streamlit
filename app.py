@@ -20,7 +20,7 @@ st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e 
 
 # --- Constantes e Variáveis Globais ---
 pio.templates.default = "plotly_white"
-MODEL_NAME = "gemini-pro" ## ALTERAÇÃO: Usando o Gemini pro para melhor capacidade de seguir instruções.
+MODEL_NAME = "gemini-2.5-flash" ## ALTERAÇÃO: Usando o gemini-2.5-flash para melhor capacidade de seguir instruções.
 MAX_HISTORY_SIZE = 8 # Reduzido um pouco, pois o contexto é mais limpo agora.
 SAMPLE_ROWS = 100000
 
