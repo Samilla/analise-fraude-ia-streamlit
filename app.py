@@ -277,21 +277,27 @@ def load_llm_and_agent(_df):
     Permite execução de código Python para análises complexas
     """
     
-    # CORREÇÃO: Prompt simplificado que força execução de código
-    analyst_prompt = """Você é um assistente Python especializado em análise de dados.
+    # CORREÇÃO: Prompt que gera explicações junto com os resultados
+    analyst_prompt = """Você é um assistente Python especializado em análise de dados fiscais.
 
-REGRAS OBRIGATÓRIAS:
-1. SEMPRE execute código Python para responder
-2. NUNCA retorne apenas o código, EXECUTE-O
-3. Use 'df' como nome do DataFrame
-4. Seja direto e objetivo
+FORMATO DE RESPOSTA OBRIGATÓRIO:
+1. Execute o código Python necessário
+2. Após mostrar o resultado, SEMPRE adicione uma explicação breve
 
-Quando o usuário perguntar algo, você DEVE:
-- Executar código Python
-- Retornar o resultado da execução
-- NÃO apenas mostrar o código
+ESTRUTURA DA RESPOSTA:
+[Resultado da análise]
 
-IMPORTANTE: Use python_repl_ast para executar o código."""
+📊 **Interpretação:**
+[Explicação clara do que os números significam, insights relevantes, e recomendações se aplicável]
+
+REGRAS:
+- Use 'df' como nome do DataFrame
+- Seja objetivo mas explicativo
+- Para correlações, explique se é forte/fraca/positiva/negativa
+- Para estatísticas, destaque valores importantes
+- Identifique possíveis anomalias ou padrões
+
+IMPORTANTE: Execute o código E explique o resultado."""
 
     try:
         llm = ChatGoogleGenerativeAI(
@@ -302,17 +308,17 @@ IMPORTANTE: Use python_repl_ast para executar o código."""
             timeout=60
         )
         
-        # CORREÇÃO 6: Configuração robusta do agente com tratamento de erros
+        # CORREÇÃO 6: Usa OpenAI Functions Agent para melhor parsing
         agent = create_pandas_dataframe_agent(
             llm=llm,
             df=_df,
             verbose=True,
-            agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+            agent_type=AgentType.OPENAI_FUNCTIONS,  # Melhor para Gemini 2.5
             prefix=analyst_prompt,
             allow_dangerous_code=True,
-            max_iterations=4,
-            max_execution_time=45,
-            handle_parsing_errors=True  # Ativa tratamento de erros
+            number_of_head_rows=3,  # Mostra apenas 3 linhas para economizar tokens
+            max_iterations=5,
+            early_stopping_method="generate"
         )
         
         return agent
@@ -442,13 +448,12 @@ if st.session_state.data_agent and st.session_state.df is not None:
         else:
             with st.spinner("🤖 Processando..."):
                 try:
-                    # CORREÇÃO: Tratamento robusto de erros
+                    # CORREÇÃO: Execução simplificada
                     response = st.session_state.data_agent.invoke({
-                        "input": prompt,
-                        "handle_parsing_errors": True
+                        "input": prompt
                     })
                     
-                    # Extrai o output (pode vir em diferentes formatos)
+                    # Extrai o output
                     if isinstance(response, dict):
                         response_text = response.get('output', str(response))
                     else:
@@ -457,25 +462,33 @@ if st.session_state.data_agent and st.session_state.df is not None:
                     # Limpa a resposta
                     response_text = response_text.strip()
                     
-                    # Salva no cache
-                    st.session_state.query_cache[query_hash] = response_text
-                    st.session_state.api_calls_count += 1
+                    # Verifica se retornou código ao invés de resultado
+                    if response_text.startswith(('print(', 'df.', 'pd.')):
+                        response_text = "⚠️ O agente retornou código ao invés do resultado. Tente reformular a pergunta de forma mais específica."
+                    
+                    # Salva no cache apenas se for uma resposta válida
+                    if not response_text.startswith('⚠️'):
+                        st.session_state.query_cache[query_hash] = response_text
+                        st.session_state.api_calls_count += 1
                     
                 except Exception as e:
-                    error_msg = str(e)
+                    error_msg = str(e).lower()
                     
-                    # Trata erros de parsing especificamente
-                    if "parsing error" in error_msg.lower():
-                        response_text = """⚠️ **Erro de interpretação da resposta.**
+                    # Mensagens de erro mais específicas
+                    if "parsing" in error_msg or "could not parse" in error_msg:
+                        response_text = """⚠️ **Erro de interpretação.**
                         
-Tente reformular sua pergunta de forma mais direta, como:
-- "Quantas linhas tem o dataset?"
-- "Mostre as 5 primeiras linhas"
-- "Qual a média da coluna X?"
-- "Quais são as colunas?"
+Tente perguntas mais diretas como:
+- "Liste as colunas"
+- "Conte as linhas"
+- "Exiba estatísticas básicas"
 """
+                    elif "timeout" in error_msg:
+                        response_text = "⏱️ Tempo esgotado. Tente uma pergunta mais simples."
+                    elif "rate limit" in error_msg or "quota" in error_msg:
+                        response_text = "🚫 Limite de API atingido. Aguarde alguns segundos."
                     else:
-                        response_text = f"⚠️ Erro ao processar: {error_msg[:200]}"
+                        response_text = f"⚠️ Erro: {str(e)[:150]}"
                     
                     st.error(response_text)
         
