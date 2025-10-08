@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Agente de Análise de Dados e Detecção de Fraudes com Gemini SDK (Versão Final Estável)
 # Implementado a arquitetura de Chamada de Função (Tool Calling) para resolver o Timeout 500.
 
