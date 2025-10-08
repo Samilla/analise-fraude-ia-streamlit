@@ -32,7 +32,7 @@ st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e 
 pio.templates.default = "plotly_white"
 MODEL_NAME = "gemini-2.5-flash"
 MAX_HISTORY_SIZE = 10 
-SAMPLE_ROWS = 100000 
+SAMPLE_ROWS = 50000 # REDUÇÃO CRÍTICA PARA ESTABILIDADE E RESOLUÇÃO DO ERRO 504
 DEFAULT_TEMP_CSV_PATH = "/tmp/default_data.csv"
 
 # Tenta obter a chave da API do Gemini do secrets.toml (Streamlit Cloud)
