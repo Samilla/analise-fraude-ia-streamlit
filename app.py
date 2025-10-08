@@ -15,8 +15,8 @@ import numpy as np
 st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e de Fraudes")
 pio.templates.default = "plotly_white"
 
-# Modelo
-MODEL_NAME = "gemini-1.5-flash"
+# Modelo - Testando versões disponíveis
+MODEL_NAME = "gemini-2.5-flash"  # Modelo mais estável e universalmente disponível
 
 # API Key
 try:
@@ -189,11 +189,13 @@ def create_chart(df, chart_info):
             fig = px.scatter(df.head(1000), x=col1, y=col2,
                            title=f'📊 Relação entre {col1} e {col2}',
                            opacity=0.6)
+            fig.update_layout(showlegend=False)
             return fig
         
         elif chart_type == 'histogram' and col1:
             fig = px.histogram(df, x=col1, nbins=30,
                              title=f'📊 Distribuição de {col1}')
+            fig.update_layout(showlegend=False)
             return fig
         
         elif chart_type == 'bar' and col1:
@@ -201,7 +203,7 @@ def create_chart(df, chart_info):
             fig = px.bar(x=counts.index, y=counts.values,
                        labels={'x': col1, 'y': 'Contagem'},
                        title=f'📊 Top 15 - {col1}')
-            fig.update_layout(xaxis_tickangle=-45)
+            fig.update_layout(xaxis_tickangle=-45, showlegend=False)
             return fig
         
         elif chart_type == 'heatmap':
@@ -209,7 +211,8 @@ def create_chart(df, chart_info):
             corr = numeric_df.corr()
             fig = px.imshow(corr, text_auto=True, aspect="auto",
                           title='📊 Matriz de Correlação',
-                          color_continuous_scale='RdBu_r')
+                          color_continuous_scale='RdBu_r',
+                          labels=dict(color="Correlação"))
             return fig
             
     except Exception as e:
@@ -220,9 +223,19 @@ def create_chart(df, chart_info):
 
 def use_llm_for_complex_query(df, query):
     """Usa LLM apenas para queries complexas que não podem ser resolvidas diretamente"""
-    try:
-        # Prepara contexto do DataFrame
-        df_info = f"""Dataset Info:
+    
+    # Lista de modelos para tentar (em ordem de prioridade)
+    models_to_try = [
+        "gemini-pro",
+        "models/gemini-pro",
+        "gemini-1.5-flash",
+        "models/gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "models/gemini-1.5-pro"
+    ]
+    
+    # Prepara contexto do DataFrame
+    df_info = f"""Dataset Info:
 - Linhas: {len(df)}
 - Colunas: {', '.join(df.columns.tolist())}
 - Tipos: {df.dtypes.to_dict()}
@@ -233,16 +246,8 @@ Primeiras 3 linhas:
 Estatísticas básicas:
 {df.describe().to_string() if len(df.select_dtypes(include=['number']).columns) > 0 else 'Sem colunas numéricas'}
 """
-        
-        llm = ChatGoogleGenerativeAI(
-            model=MODEL_NAME,
-            google_api_key=API_KEY,
-            temperature=0.3,
-            max_output_tokens=800,
-            timeout=60
-        )
-        
-        prompt = f"""{df_info}
+    
+    prompt = f"""{df_info}
 
 Pergunta do usuário: {query}
 
@@ -253,12 +258,42 @@ Instruções:
 4. Se aplicável, sugira visualizações
 
 Resposta:"""
-        
-        response = llm.invoke(prompt)
-        return response.content
-        
-    except Exception as e:
-        return f"❌ Erro ao usar LLM: {str(e)}"
+    
+    # Tenta cada modelo até um funcionar
+    for model_name in models_to_try:
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model=model_name,
+                google_api_key=API_KEY,
+                temperature=0.3,
+                max_output_tokens=800,
+                timeout=60
+            )
+            
+            response = llm.invoke(prompt)
+            return response.content
+            
+        except Exception as e:
+            error_msg = str(e)
+            # Se for erro 404, tenta próximo modelo
+            if "404" in error_msg or "not found" in error_msg.lower():
+                continue
+            # Se for outro erro, retorna mensagem
+            else:
+                return f"❌ Erro ao usar LLM: {error_msg[:200]}"
+    
+    # Se nenhum modelo funcionou
+    return """⚠️ **Não foi possível acessar o modelo Gemini.**
+
+**Soluções:**
+1. Verifique sua API Key em: https://makersuite.google.com/app/apikey
+2. Teste qual modelo está disponível com o script de teste
+3. Use perguntas diretas que não precisam de LLM:
+   - "Liste as colunas"
+   - "Mostre estatísticas"
+   - "Correlação entre X e Y"
+
+💡 A maioria das análises funcionam SEM precisar do LLM!"""
 
 # --- Funções de Arquivo ---
 def unzip_and_read_file(uploaded_file):
@@ -363,7 +398,7 @@ if st.session_state.df is not None:
             if chart_info:
                 chart = create_chart(st.session_state.df, chart_info)
                 if chart:
-                    st.plotly_chart(chart, width='stretch')
+                    st.plotly_chart(chart, use_container_width=True, key=f"chart_{len(st.session_state.chat_history)}")
 
 else:
     st.info("⚠️ Carregue um arquivo CSV, ZIP ou GZ para iniciar.")
