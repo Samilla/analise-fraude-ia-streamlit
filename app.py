@@ -266,22 +266,25 @@ def load_llm_and_agent(_df):
     Permite execução de código Python para análises complexas
     """
     
-    # Prompt otimizado e mais direto
-    analyst_prompt = """Você é um Analista de Dados Fiscal especializado.
+    # CORREÇÃO: Prompt mais estruturado para evitar erros de parsing
+    analyst_prompt = """Você é um Analista de Dados especializado em análises fiscais.
 
-REGRAS IMPORTANTES:
-1. Seja CONCISO e DIRETO - respostas com no máximo 3 parágrafos
-2. Use APENAS os dados do DataFrame fornecido
-3. Para cálculos, use pandas diretamente (df.groupby, df.corr, etc)
-4. Crie gráficos se solicitado - gere a imagem do gráfico 
-5. Formate números com 2 casas decimais
+INSTRUÇÕES CRÍTICAS:
+1. Use APENAS código Python com pandas para responder
+2. Sempre finalize com print() para mostrar o resultado
+3. Seja DIRETO - máximo 3 linhas de código
+4. NÃO crie gráficos, apenas análise de dados
+5. Use df como nome do DataFrame
 
-ANÁLISES PERMITIDAS:
-- Estatísticas descritivas
-- Agrupamentos e agregações
-- Correlações
-- Identificação de outliers
-- Análise de valores faltantes"""
+EXEMPLOS DE RESPOSTA:
+Pergunta: "Quantas linhas tem?"
+Resposta: print(f"Total de linhas: {len(df)}")
+
+Pergunta: "Mostre as colunas"
+Resposta: print(df.columns.tolist())
+
+Pergunta: "Média da coluna X"
+Resposta: print(df['X'].mean())"""
 
     try:
         llm = ChatGoogleGenerativeAI(
@@ -448,10 +451,18 @@ if st.session_state.data_agent and st.session_state.df is not None:
         st.session_state.chat_history_list.append(("agent", response_text))
         st.chat_message("assistant").markdown(response_text)
         
-        # CORREÇÃO 9: Gera gráfico automaticamente se solicitado
-        chart = create_chart_from_query(st.session_state.df, prompt, response_text)
-        if chart:
-            st.plotly_chart(chart, use_container_width=True)
+        # CORREÇÃO 9: Detecta e gera gráfico se solicitado
+        chart_type, _ = detect_chart_request(prompt)
+        
+        if chart_type:
+            st.info("📊 Gerando visualização...")
+            chart = create_chart_from_query(st.session_state.df, prompt, chart_type)
+            
+            if chart:
+                st.plotly_chart(chart, use_container_width=True)
+                st.success("✅ Gráfico gerado com sucesso!")
+            else:
+                st.warning("⚠️ Não foi possível gerar o gráfico. Tente especificar as colunas na sua pergunta.")
 
 else:
     st.info("⚠️ Carregue um arquivo CSV, ZIP ou GZ para iniciar.")
