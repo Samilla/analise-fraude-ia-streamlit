@@ -21,8 +21,8 @@ st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e 
 # --- Constantes e Variáveis Globais ---
 pio.templates.default = "plotly_white"
 
-# CORREÇÃO 1: Modelo correto do Gemini
-MODEL_NAME = "gemini-2.5-flash"  # Modelo estável e disponível
+# CORREÇÃO 1: Modelo Gemini 2.5 Flash
+MODEL_NAME = "gemini-2.5-flash"  # Modelo mais recente
 
 # Tenta obter a chave da API
 try:
@@ -76,9 +76,20 @@ def detect_chart_request(query):
     """Detecta se o usuário quer um gráfico e qual tipo"""
     query_lower = query.lower()
     
-    # Palavras-chave que indicam solicitação de gráfico
-    chart_keywords = ['gráfico', 'grafico', 'visualiz', 'plot', 'chart', 'mostre', 
-                      'exiba', 'desenhe', 'plote', 'faça um gráfico', 'crie um gráfico']
+    # IMPORTANTE: Palavras que NÃO indicam gráfico (queries de informação)
+    info_keywords = ['coluna', 'colunas', 'linhas', 'registros', 'quantas', 'quantos', 
+                     'primeiras', 'últimas', 'tipo', 'tipos', 'estrutura', 'formato',
+                     'nome', 'nomes', 'lista', 'listar', 'informações', 'informacao']
+    
+    # Se for uma query de informação, NÃO gera gráfico
+    if any(word in query_lower for word in info_keywords):
+        # Exceção: se explicitamente pedir gráfico junto
+        if not any(word in query_lower for word in ['gráfico', 'grafico', 'plot', 'chart', 'visualiz']):
+            return None, None
+    
+    # Palavras-chave que indicam solicitação de gráfico (precisa ser EXPLÍCITO)
+    chart_keywords = ['gráfico', 'grafico', 'visualiz', 'plot', 'plote', 'chart', 
+                      'desenhe', 'crie um gráfico', 'faça um gráfico', 'gere um gráfico']
     
     wants_chart = any(word in query_lower for word in chart_keywords)
     
@@ -267,6 +278,7 @@ def load_llm_and_agent(_df):
     """
     
     # CORREÇÃO: Prompt mais estruturado para evitar erros de parsing
+    # IMPORTANTE: Não use {variáveis} pois o LangChain interpreta como template
     analyst_prompt = """Você é um Analista de Dados especializado em análises fiscais.
 
 INSTRUÇÕES CRÍTICAS:
@@ -278,7 +290,7 @@ INSTRUÇÕES CRÍTICAS:
 
 EXEMPLOS DE RESPOSTA:
 Pergunta: "Quantas linhas tem?"
-Resposta: print(f"Total de linhas: {len(df)}")
+Resposta: print(f"Total de linhas: " + str(len(df)))
 
 Pergunta: "Mostre as colunas"
 Resposta: print(df.columns.tolist())
@@ -295,7 +307,7 @@ Resposta: print(df['X'].mean())"""
             timeout=60
         )
         
-        # CORREÇÃO 6: Usa create_pandas_dataframe_agent
+        # CORREÇÃO 6: Configuração robusta do agente com tratamento de erros
         agent = create_pandas_dataframe_agent(
             llm=llm,
             df=_df,
@@ -303,9 +315,13 @@ Resposta: print(df['X'].mean())"""
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
             prefix=analyst_prompt,
             allow_dangerous_code=True,
-            max_iterations=3,  # CORREÇÃO 7: Limita iterações
-            max_execution_time=30,  # Timeout por query
-            handle_parsing_errors=True
+            max_iterations=4,  # Aumentado para dar mais chances
+            max_execution_time=45,
+            handle_parsing_errors=True,  # CRÍTICO: Ativa tratamento de erros
+            agent_executor_kwargs={
+                "handle_parsing_errors": True,
+                "return_intermediate_steps": False
+            }
         )
         
         return agent
@@ -435,16 +451,41 @@ if st.session_state.data_agent and st.session_state.df is not None:
         else:
             with st.spinner("🤖 Processando..."):
                 try:
-                    # Executa query
-                    response = st.session_state.data_agent.invoke({"input": prompt})
-                    response_text = response['output']
+                    # CORREÇÃO: Tratamento robusto de erros
+                    response = st.session_state.data_agent.invoke({
+                        "input": prompt,
+                        "handle_parsing_errors": True
+                    })
+                    
+                    # Extrai o output (pode vir em diferentes formatos)
+                    if isinstance(response, dict):
+                        response_text = response.get('output', str(response))
+                    else:
+                        response_text = str(response)
+                    
+                    # Limpa a resposta
+                    response_text = response_text.strip()
                     
                     # Salva no cache
                     st.session_state.query_cache[query_hash] = response_text
                     st.session_state.api_calls_count += 1
                     
                 except Exception as e:
-                    response_text = f"⚠️ Erro ao processar: {str(e)[:200]}"
+                    error_msg = str(e)
+                    
+                    # Trata erros de parsing especificamente
+                    if "parsing error" in error_msg.lower():
+                        response_text = """⚠️ **Erro de interpretação da resposta.**
+                        
+Tente reformular sua pergunta de forma mais direta, como:
+- "Quantas linhas tem o dataset?"
+- "Mostre as 5 primeiras linhas"
+- "Qual a média da coluna X?"
+- "Quais são as colunas?"
+"""
+                    else:
+                        response_text = f"⚠️ Erro ao processar: {error_msg[:200]}"
+                    
                     st.error(response_text)
         
         # Adiciona resposta ao histórico
