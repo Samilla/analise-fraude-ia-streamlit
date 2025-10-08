@@ -1,404 +1,396 @@
+# -*- coding: utf-8 -*-
+# Agente de Análise de Dados e Detecção de Fraudes com Gemini SDK (Versão Final Estável)
+# Implementado Streaming e OTIMIZAÇÃO DE PROTOCOLO para resolver erros de Timeout.
+
 import streamlit as st
 import pandas as pd
 import os
+import tempfile
 import zipfile
 import gzip
+import io
 import json
-from langchain_google_genai import ChatGoogleGenerativeAI
 import plotly.express as px
-import plotly.graph_objects as go
 import plotly.io as pio
-import hashlib
-import numpy as np
+import google.generativeai as genai
+import traceback
 
-# --- Configurações Iniciais ---
-st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e de Fraudes")
+# --- Configurações Iniciais do Streamlit ---
+st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e de Fraudes (Estável)")
+
+# --- Constantes e Variáveis Globais ---
 pio.templates.default = "plotly_white"
+MODEL_NAME = "gemini-2.5-flash"
+MAX_HISTORY_SIZE = 10 
+SAMPLE_ROWS = 100000 # Tamanho máximo para análises estatísticas para evitar timeout
 
-# Modelo - Testando versões disponíveis
-MODEL_NAME = "gemini-2.5-flash"  # Modelo mais estável e universalmente disponível
-
-# API Key
+# Tenta obter a chave da API do Gemini do secrets.toml (Streamlit Cloud)
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
 except (KeyError, AttributeError):
     API_KEY = os.environ.get("GEMINI_KEY", "")
 
 if not API_KEY:
-    st.error("ERRO: Chave da API do Gemini não encontrada.")
+    st.error("ERRO: Chave da API do Gemini não encontrada. Configure a chave no .streamlit/secrets.toml ou na variável de ambiente GEMINI_KEY.")
 
-# --- Funções de Análise Direta (SEM AGENT) ---
-def analyze_dataframe(df):
-    """Retorna análise básica do DataFrame"""
-    analysis = {
-        'shape': df.shape,
-        'columns': df.columns.tolist(),
-        'dtypes': df.dtypes.to_dict(),
-        'missing': df.isnull().sum().to_dict(),
-        'numeric_stats': df.describe().to_dict() if len(df.select_dtypes(include=['number']).columns) > 0 else {},
-        'sample': df.head(5).to_dict('records')
-    }
-    return analysis
+# --- Inicialização Estável do Gemini ---
 
-def execute_query_directly(df, query):
+@st.cache_resource
+def get_gemini_client(api_key, model_name):
     """
-    Executa queries diretamente no DataFrame sem usar agent
-    Muito mais estável e rápido
+    Inicializa e armazena o cliente Gemini na cache.
     """
-    query_lower = query.lower()
-    
-    try:
-        # Lista colunas
-        if any(word in query_lower for word in ['coluna', 'colunas', 'lista', 'liste']):
-            result = f"**Colunas do Dataset:**\n\n" + "\n".join([f"- {col}" for col in df.columns])
-            return result, None
-        
-        # Conta linhas
-        elif any(word in query_lower for word in ['quantas linhas', 'total de linhas', 'linhas tem', 'count', 'tamanho']):
-            result = f"📊 **Total de linhas:** {len(df):,}\n**Total de colunas:** {len(df.columns)}"
-            return result, None
-        
-        # Primeiras linhas
-        elif any(word in query_lower for word in ['primeira', 'primeiras', 'head', 'mostr']):
-            n = 5
-            for word in query_lower.split():
-                if word.isdigit():
-                    n = int(word)
-            result = f"**Primeiras {n} linhas:**\n\n"
-            result += df.head(n).to_markdown(index=False)
-            return result, None
-        
-        # Estatísticas
-        elif any(word in query_lower for word in ['estatística', 'estatistica', 'describe', 'resumo']):
-            numeric_df = df.select_dtypes(include=['number'])
-            if len(numeric_df.columns) > 0:
-                result = "📊 **Estatísticas Descritivas:**\n\n"
-                result += numeric_df.describe().to_markdown()
-                return result, None
-            else:
-                return "⚠️ Não há colunas numéricas no dataset.", None
-        
-        # Valores únicos
-        elif 'único' in query_lower or 'unicos' in query_lower or 'unique' in query_lower:
-            for col in df.columns:
-                if col.lower() in query_lower:
-                    unique_vals = df[col].nunique()
-                    result = f"📊 **Coluna '{col}':**\n\n"
-                    result += f"- Valores únicos: {unique_vals:,}\n"
-                    if unique_vals <= 20:
-                        result += f"\n**Valores:**\n" + "\n".join([f"- {val}" for val in df[col].unique()])
-                    return result, None
-        
-        # Correlação
-        elif 'correlação' in query_lower or 'correlacao' in query_lower:
-            cols_mentioned = [col for col in df.columns if col.lower() in query_lower]
-            
-            if len(cols_mentioned) >= 2:
-                col1, col2 = cols_mentioned[0], cols_mentioned[1]
-                if df[col1].dtype in ['int64', 'float64'] and df[col2].dtype in ['int64', 'float64']:
-                    corr = df[col1].corr(df[col2])
-                    
-                    # Interpretação
-                    if abs(corr) > 0.7:
-                        strength = "forte"
-                    elif abs(corr) > 0.4:
-                        strength = "moderada"
-                    else:
-                        strength = "fraca"
-                    
-                    direction = "positiva" if corr > 0 else "negativa"
-                    
-                    result = f"📊 **Correlação entre {col1} e {col2}:**\n\n"
-                    result += f"- Valor: **{corr:.4f}**\n\n"
-                    result += f"**📈 Interpretação:**\n"
-                    result += f"A correlação é **{strength} e {direction}**. "
-                    
-                    if abs(corr) > 0.7:
-                        result += f"Isso indica uma relação linear forte entre as variáveis."
-                    elif abs(corr) > 0.4:
-                        result += f"Existe uma relação moderada entre as variáveis."
-                    else:
-                        result += f"Há pouca ou nenhuma relação linear entre as variáveis."
-                    
-                    return result, ('scatter', col1, col2)
-            else:
-                # Matriz de correlação geral
-                numeric_df = df.select_dtypes(include=['number'])
-                if len(numeric_df.columns) >= 2:
-                    corr_matrix = numeric_df.corr()
-                    result = "📊 **Matriz de Correlação:**\n\n"
-                    result += corr_matrix.to_markdown()
-                    return result, ('heatmap', None, None)
-        
-        # Média
-        elif 'média' in query_lower or 'media' in query_lower or 'mean' in query_lower:
-            for col in df.columns:
-                if col.lower() in query_lower:
-                    if df[col].dtype in ['int64', 'float64']:
-                        mean_val = df[col].mean()
-                        std_val = df[col].std()
-                        result = f"📊 **Estatísticas de '{col}':**\n\n"
-                        result += f"- Média: **{mean_val:.2f}**\n"
-                        result += f"- Desvio Padrão: **{std_val:.2f}**\n"
-                        result += f"- Mínimo: {df[col].min():.2f}\n"
-                        result += f"- Máximo: {df[col].max():.2f}\n"
-                        return result, ('histogram', col, None)
-        
-        # Valores faltantes
-        elif 'faltante' in query_lower or 'nulo' in query_lower or 'null' in query_lower or 'missing' in query_lower:
-            missing = df.isnull().sum()
-            missing = missing[missing > 0]
-            if len(missing) > 0:
-                result = "⚠️ **Valores Faltantes:**\n\n"
-                for col, count in missing.items():
-                    pct = (count / len(df)) * 100
-                    result += f"- **{col}**: {count:,} ({pct:.2f}%)\n"
-            else:
-                result = "✅ **Não há valores faltantes no dataset!**"
-            return result, None
-        
-        # Distribuição
-        elif 'distribuição' in query_lower or 'distribuicao' in query_lower:
-            for col in df.columns:
-                if col.lower() in query_lower:
-                    if df[col].dtype in ['int64', 'float64']:
-                        return f"📊 Distribuição de **{col}**", ('histogram', col, None)
-                    else:
-                        counts = df[col].value_counts()
-                        result = f"📊 **Distribuição de '{col}':**\n\n"
-                        result += counts.head(10).to_markdown()
-                        return result, ('bar', col, None)
-        
-        # Fallback: usa LLM apenas para interpretação
-        else:
-            return None, None
-            
-    except Exception as e:
-        return f"❌ Erro ao processar: {str(e)}", None
-
-# --- Funções de Gráficos ---
-def create_chart(df, chart_info):
-    """Cria gráficos baseado no tipo e colunas"""
-    if not chart_info:
+    if not api_key:
         return None
-    
-    chart_type, col1, col2 = chart_info
-    
     try:
-        if chart_type == 'scatter' and col1 and col2:
-            fig = px.scatter(df.head(1000), x=col1, y=col2,
-                           title=f'📊 Relação entre {col1} e {col2}',
-                           opacity=0.6)
-            fig.update_layout(showlegend=False)
-            return fig
-        
-        elif chart_type == 'histogram' and col1:
-            fig = px.histogram(df, x=col1, nbins=30,
-                             title=f'📊 Distribuição de {col1}')
-            fig.update_layout(showlegend=False)
-            return fig
-        
-        elif chart_type == 'bar' and col1:
-            counts = df[col1].value_counts().head(15)
-            fig = px.bar(x=counts.index, y=counts.values,
-                       labels={'x': col1, 'y': 'Contagem'},
-                       title=f'📊 Top 15 - {col1}')
-            fig.update_layout(xaxis_tickangle=-45, showlegend=False)
-            return fig
-        
-        elif chart_type == 'heatmap':
-            numeric_df = df.select_dtypes(include=['number'])
-            corr = numeric_df.corr()
-            fig = px.imshow(corr, text_auto=True, aspect="auto",
-                          title='📊 Matriz de Correlação',
-                          color_continuous_scale='RdBu_r',
-                          labels=dict(color="Correlação"))
-            return fig
-            
+        genai.configure(api_key=api_key)
+        client = genai.GenerativeModel(
+            model_name=model_name
+        )
+        return client
     except Exception as e:
-        st.warning(f"⚠️ Erro ao criar gráfico: {e}")
+        st.error(f"Erro fatal ao configurar o Gemini SDK. Verifique sua chave de API. Detalhes: {e}")
         return None
-    
-    return None
 
-def use_llm_for_complex_query(df, query):
-    """Usa LLM apenas para queries complexas que não podem ser resolvidas diretamente"""
-    
-    # Lista de modelos para tentar (em ordem de prioridade)
-    models_to_try = [
-        "gemini-pro",
-        "models/gemini-pro",
-        "gemini-1.5-flash",
-        "models/gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "models/gemini-1.5-pro"
-    ]
-    
-    # Prepara contexto do DataFrame
-    df_info = f"""Dataset Info:
-- Linhas: {len(df)}
-- Colunas: {', '.join(df.columns.tolist())}
-- Tipos: {df.dtypes.to_dict()}
+# Inicializa o cliente uma única vez, armazenando-o em um recurso cacheado.
+gemini_client = get_gemini_client(API_KEY, MODEL_NAME)
 
-Primeiras 3 linhas:
-{df.head(3).to_string()}
+# --- Funções de Manipulação de Arquivos ---
 
-Estatísticas básicas:
-{df.describe().to_string() if len(df.select_dtypes(include=['number']).columns) > 0 else 'Sem colunas numéricas'}
-"""
-    
-    prompt = f"""{df_info}
-
-Pergunta do usuário: {query}
-
-Instruções:
-1. Analise os dados fornecidos
-2. Responda de forma clara e objetiva
-3. Use markdown para formatação
-4. Se aplicável, sugira visualizações
-
-Resposta:"""
-    
-    # Tenta cada modelo até um funcionar
-    for model_name in models_to_try:
-        try:
-            llm = ChatGoogleGenerativeAI(
-                model=model_name,
-                google_api_key=API_KEY,
-                temperature=0.3,
-                max_output_tokens=800,
-                timeout=60
-            )
-            
-            response = llm.invoke(prompt)
-            return response.content
-            
-        except Exception as e:
-            error_msg = str(e)
-            # Se for erro 404, tenta próximo modelo
-            if "404" in error_msg or "not found" in error_msg.lower():
-                continue
-            # Se for outro erro, retorna mensagem
-            else:
-                return f"❌ Erro ao usar LLM: {error_msg[:200]}"
-    
-    # Se nenhum modelo funcionou
-    return """⚠️ **Não foi possível acessar o modelo Gemini.**
-
-**Soluções:**
-1. Verifique sua API Key em: https://makersuite.google.com/app/apikey
-2. Teste qual modelo está disponível com o script de teste
-3. Use perguntas diretas que não precisam de LLM:
-   - "Liste as colunas"
-   - "Mostre estatísticas"
-   - "Correlação entre X e Y"
-
-💡 A maioria das análises funcionam SEM precisar do LLM!"""
-
-# --- Funções de Arquivo ---
+@st.cache_data
 def unzip_and_read_file(uploaded_file):
-    """Descompacta e lê arquivos"""
+    """
+    Descompacta arquivos ZIP ou GZ, lê o conteúdo CSV e retorna o DataFrame
+    e o caminho temporário do arquivo.
+    """
     file_extension = uploaded_file.name.lower().split('.')[-1]
     uploaded_file.seek(0)
     
+    # Cria o arquivo temporário de forma síncrona
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
+        tmp_csv_path = tmp_file.name
+
     try:
+        # Lógica de descompactação e leitura
         if file_extension == 'zip':
             with zipfile.ZipFile(uploaded_file, 'r') as zf:
                 csv_files = [name for name in zf.namelist() if name.endswith('.csv')]
                 if not csv_files:
                     st.error("Nenhum arquivo CSV encontrado dentro do ZIP.")
-                    return None
+                    return None, None
+                
                 with zf.open(csv_files[0]) as csv_file:
                     df = pd.read_csv(csv_file)
-                    return df
-                    
+                    df.to_csv(tmp_csv_path, index=False)
+                    return tmp_csv_path, df
+        
         elif uploaded_file.name.endswith(('.gz', '.gzip')):
             with gzip.open(uploaded_file, 'rt') as gz_file:
                 df = pd.read_csv(gz_file)
-                return df
-                
+                df.to_csv(tmp_csv_path, index=False)
+                return tmp_csv_path, df
+
         elif file_extension == 'csv':
             df = pd.read_csv(uploaded_file)
-            return df
-            
+            uploaded_file.seek(0)
+            with open(tmp_csv_path, 'wb') as f:
+                f.write(uploaded_file.read())
+            return tmp_csv_path, df
+    
     except Exception as e:
         st.error(f"Erro ao processar o arquivo: {e}")
-        return None
+        if os.path.exists(tmp_csv_path):
+            os.remove(os.path.abspath(tmp_csv_path)) # Garante a remoção
+        return None, None
     
-    return None
+    return tmp_csv_path, df
 
-# --- Interface ---
+@st.cache_data(show_spinner="Cacheando DataFrame na Memória...")
+def get_execution_df(temp_csv_path):
+    """
+    Lê o DataFrame e aplica amostragem se for muito grande. 
+    Retorna o DataFrame cacheado e flags de amostragem.
+    """
+    df = pd.read_csv(temp_csv_path)
+    original_rows = df.shape[0]
+    
+    is_sampled = False
+    
+    if original_rows > SAMPLE_ROWS:
+        df = df.sample(n=SAMPLE_ROWS, random_state=42)
+        is_sampled = True
+        
+    return df, is_sampled, original_rows
+
+def get_specialist_prompt(df, temp_csv_path):
+    """Gera o prompt de sistema para instruir o Gemini como especialista."""
+    # O df passado aqui é apenas para metadados (não para o exec)
+    df_temp, is_sampled, original_rows = get_execution_df(temp_csv_path)
+
+    col_info = df.dtypes.to_markdown()
+    
+    sampling_info = ""
+    if is_sampled:
+        sampling_info = (
+            f"**ATENÇÃO:** O DataFrame '{df.shape[0]} linhas' está muito grande. "
+            f"Para análises e cálculos, você está usando uma **AMOSTRA ALEATÓRIA de {SAMPLE_ROWS} linhas** do total de {original_rows} linhas, "
+            "para evitar timeouts. Comente que a análise é baseada em uma amostra."
+        )
+    
+    return f"""
+    Você é um Multi Agente de IA SUPER ESPECIALISTA em Contabilidade, Análise de Dados e Desenvolvimento Python.
+    Sua missão é analisar dados do arquivo CSV localizado em: {temp_csv_path}.
+
+    **Contexto do Arquivo:**
+    - O arquivo possui {original_rows} linhas e {df.shape[1]} colunas.
+    - **{sampling_info}**
+    - **Tipos de Dados:**
+    {col_info}
+
+    **Regras OBRIGATÓRIAS (Essencial para a estabilidade e gráficos):**
+    1. **Ferramenta Única:** Você tem acesso à biblioteca Pandas.
+    2. **Saída de Gráfico:** **SEMPRE** que o usuário solicitar uma visualização, gere o código Python completo usando **Plotly Express (px)**.
+    3. **Formato:** O código Python para o gráfico deve ser **impresso** no formato de string JSON do Plotly, usando o comando:
+       `print(f"<PLOTLY_JSON>{{fig.to_json()}}</PLOTLY_JSON>")`
+    4. **Caminho do Arquivo:** **SEMPRE** use `df` no código Python (o DataFrame já está pré-carregado no ambiente de execução).
+    5. **Tolerância:** Responda à pergunta do usuário diretamente após gerar o código. Não use raciocínio em etapas.
+    6. **Resumo:** Ao final da sua análise ou do código, forneça um resumo claro e conciso da sua conclusão.
+    """
+
+def execute_python_code(code_str, temp_csv_path):
+    """Executa código Python gerado pelo LLM em um ambiente seguro."""
+    
+    # Obtém o DataFrame da cache para execução instantânea
+    df_exec, is_sampled, original_rows = get_execution_df(st.session_state.temp_csv_path)
+    
+    # Define o ambiente de execução com o dataframe lido
+    exec_globals = {
+        'pd': pd,
+        'px': px,
+        'plt': None, # Remove matplotlib
+        'df': df_exec, # Usa o DataFrame cacheado (pequeno)
+        'print': print # Permite que o LLM use print para comunicação
+    }
+    
+    # Prepara um buffer para capturar a saída do print
+    output_buffer = io.StringIO()
+    
+    try:
+        # Redireciona a saída padrão (stdout) para o nosso buffer
+        import sys
+        sys.stdout = output_buffer
+        
+        # Executa o código. O código deve usar 'df'
+        exec(code_str, exec_globals)
+        
+        # Restaura a saída padrão
+        sys.stdout = sys.__stdout__
+        
+        # Retorna a saída capturada (incluindo tags JSON)
+        return output_buffer.getvalue()
+        
+    except Exception as e:
+        sys.stdout = sys.__stdout__ # Garantir que o stdout seja restaurado
+        return f"ERRO DE EXECUÇÃO PYTHON: {e}\nTraceback: {traceback.format_exc()}"
+
+def parse_and_display_response(response_text):
+    """
+    Analisa a resposta, extrai e executa código Python e renderiza o gráfico/texto.
+    """
+    CODE_START = "```python"
+    CODE_END = "```"
+    PLOTLY_TAG = "<PLOTLY_JSON>"
+
+    if CODE_START in response_text:
+        # Separa o texto e o código
+        parts = response_text.split(CODE_START, 1)
+        text_before = parts[0].strip()
+        
+        try:
+            code_block = parts[1].split(CODE_END, 1)[0].strip()
+            text_after = parts[1].split(CODE_END, 1)[1].strip() if len(parts[1].split(CODE_END, 1)) > 1 else ""
+        except IndexError:
+            # Caso o código Python esteja no final e não tenha o fechamento ```
+            code_block = parts[1].strip()
+            text_after = ""
+
+        # Executa o código Python
+        execution_output = execute_python_code(code_block, st.session_state.temp_csv_path)
+        
+        # Exibe o texto explicativo antes do código (se houver)
+        if text_before:
+            st.chat_message("assistant").markdown(text_before)
+
+        # Verifica se o código gerou JSON Plotly (via print)
+        if PLOTLY_TAG in execution_output:
+            try:
+                # Extrai o JSON usando as tags
+                json_str = execution_output.split(PLOTLY_TAG, 1)[1].split("</PLOTLY_JSON>", 1)[0].strip()
+                fig_dict = json.loads(json_str)
+                fig = pio.from_json(json.dumps(fig_dict))
+                
+                # Renderiza o gráfico
+                st.plotly_chart(fig, use_container_width=True)
+                
+                st.chat_message("assistant").markdown("✅ **Gráfico gerado:** Analise a visualização acima.")
+                
+            except Exception as e:
+                # Se falhar ao decodificar o JSON, exibe o erro
+                st.chat_message("assistant").error(f"⚠️ Falha ao renderizar o gráfico. Erro de JSON: {e}")
+                
+        elif "ERRO DE EXECUÇÃO PYTHON" in execution_output:
+            # Exibe erro de execução
+            st.chat_message("assistant").error(f"❌ Erro ao executar código Python: {execution_output}")
+        
+        # Exibe o texto explicativo após o código (se houver)
+        if text_after:
+            st.chat_message("assistant").markdown(text_after)
+            
+    else:
+        # Se não há código Python, exibe a resposta como texto simples
+        st.chat_message("assistant").markdown(response_text)
+
+# --- Layout e Interface ---
+
 st.title("🤖 Multi Agente de Análise Fiscal e de Fraudes")
 st.markdown("---")
 
-# Estados
+# Inicialização de estado
+if 'temp_csv_path' not in st.session_state:
+    st.session_state.temp_csv_path = None
 if 'df' not in st.session_state:
     st.session_state.df = None
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
-if 'query_count' not in st.session_state:
-    st.session_state.query_count = 0
+if 'chat_history_list' not in st.session_state:
+    st.session_state.chat_history_list = []
+if 'report_content' not in st.session_state:
+    st.session_state.report_content = ""
+if 'specialist_prompt' not in st.session_state:
+    st.session_state.specialist_prompt = ""
 
-# Sidebar
+
+# --- Barra Lateral (Upload e Relatório) ---
 with st.sidebar:
-    st.header("⚙️ Configurações")
-    st.metric("Perguntas realizadas", st.session_state.query_count)
+    st.header("⚙️ Configurações de Análise")
     
     uploaded_file = st.file_uploader(
-        "Carregue seu arquivo:",
+        "Carregue seu arquivo CSV, ZIP ou GZ:",
         type=['csv', 'zip', 'gz'],
         key="file_uploader"
     )
     
-    if st.button("🔄 Reiniciar", use_container_width=True):
-        st.session_state.df = None
-        st.session_state.chat_history = []
-        st.session_state.query_count = 0
-        st.rerun()
+    st.subheader("Relatório Final")
+    report_btn = st.button("📝 Gerar Conclusão da Análise", use_container_width=True)
+    
+    if st.session_state.report_content:
+        st.download_button(
+            label="⬇️ Baixar Relatório (Markdown)",
+            data=st.session_state.report_content,
+            file_name="relatorio_analise_ia.md",
+            mime="text/markdown",
+            use_container_width=True
+        )
 
-# Processamento do arquivo
-if uploaded_file and st.session_state.df is None:
-    with st.spinner("Carregando arquivo..."):
-        df = unzip_and_read_file(uploaded_file)
+# --- Processamento do Arquivo ---
+
+if uploaded_file and st.session_state.temp_csv_path is None:
+    st.session_state.temp_csv_path, st.session_state.df = unzip_and_read_file(uploaded_file)
+    
+    if st.session_state.df is not None:
+        # Força o cache do DataFrame reduzido imediatamente
+        get_execution_df(st.session_state.temp_csv_path) 
         
-        if df is not None:
-            st.session_state.df = df
-            st.success(f"✅ Arquivo '{uploaded_file.name}' carregado!")
-            st.info(f"📊 Dataset: {df.shape[0]:,} linhas × {df.shape[1]} colunas")
-            st.info('💡 **Para iniciar, pergunte: "Liste as colunas"**')
+        st.session_state.specialist_prompt = get_specialist_prompt(st.session_state.df, st.session_state.temp_csv_path)
+        st.session_state.chat_history_list.clear() # Limpa o chat ao carregar novo arquivo
+        st.success(f"Arquivo '{uploaded_file.name}' carregado e pronto para análise! Pergunte no chat.")
+    else:
+        st.error("Falha ao carregar o arquivo. Verifique o formato.")
+
+# --- Processamento do Relatório ---
+
+if report_btn and st.session_state.df is not None:
+    report_prompt = st.session_state.specialist_prompt + "\n\nFaça uma conclusão resumida e completa de toda a análise de dados realizada até agora, incorporando as seções: Resumo Executivo, Detalhes da Análise, e Conclusão Final. Sua resposta deve ser SOMENTE o conteúdo do relatório em Markdown."
+    
+    history_context = "\n".join([f"{h['role']}: {h['content']}" for h in st.session_state.chat_history_list])
+    
+    full_prompt = report_prompt + "\n\nHistórico da Conversa:\n" + history_context
+
+    with st.spinner("Gerando relatório completo..."):
+        try:
+            response = gemini_client.generate_content(
+                full_prompt, 
+                config={"temperature": 0.0, "timeout": 180} # Configuração de precisão e timeout
+            )
+            st.session_state.report_content = response.text
+            st.success("Relatório gerado com sucesso! Use o botão 'Baixar Relatório (Markdown)' na lateral.")
             
-            with st.expander("👀 Preview dos Dados"):
-                st.dataframe(df.head(10), width='stretch')
+        except Exception as e:
+            st.error(f"Erro ao gerar o relatório: {e}")
 
-# Chat
-for role, message in st.session_state.chat_history:
-    st.chat_message(role).markdown(message)
+# --- Interface de Chat ---
 
-# Input
-if st.session_state.df is not None:
-    if prompt := st.chat_input("Faça sua pergunta..."):
-        # Adiciona pergunta
-        st.session_state.chat_history.append(("user", prompt))
+# Exibe o histórico de chat
+for item in st.session_state.chat_history_list:
+    role = item['role']
+    content = item['content']
+    
+    if role == "user":
+        st.chat_message("user").markdown(content)
+    else:
+        # O parser agora está integrado na função principal
+        parse_and_display_response(content)
+
+
+# Campo de entrada de prompt do usuário
+if st.session_state.df is not None and gemini_client:
+    if prompt := st.chat_input("Faça sua pergunta ao Agente..."):
+        # Adiciona a pergunta ao histórico
+        st.session_state.chat_history_list.append({"role": "user", "content": prompt})
         st.chat_message("user").markdown(prompt)
-        
-        with st.spinner("🤖 Analisando..."):
-            # Tenta análise direta (rápida e sem API)
-            result, chart_info = execute_query_directly(st.session_state.df, prompt)
-            
-            # Se não conseguiu responder diretamente, usa LLM
-            if result is None:
-                result = use_llm_for_complex_query(st.session_state.df, prompt)
-                st.session_state.query_count += 1
-            
-            # Exibe resposta
-            st.session_state.chat_history.append(("assistant", result))
-            st.chat_message("assistant").markdown(result)
-            
-            # Cria gráfico se aplicável
-            if chart_info:
-                chart = create_chart(st.session_state.df, chart_info)
-                if chart:
-                    st.plotly_chart(chart, use_container_width=True, key=f"chart_{len(st.session_state.chat_history)}")
 
-else:
-    st.info("⚠️ Carregue um arquivo CSV, ZIP ou GZ para iniciar.")
+        with st.spinner("Agente de IA está processando..."):
+            try:
+                # Otimização de contexto: Limita o histórico
+                limited_history = st.session_state.chat_history_list[-MAX_HISTORY_SIZE:]
+
+                # Constrói o histórico da conversa no formato de mensagens do Gemini SDK
+                history_contents = []
+                for item in limited_history:
+                    role = "user" if item['role'] == "user" else "model"
+                    history_contents.append({"role": role, "parts": [{"text": item['content']}]})
+                
+                # Chama a API do Gemini com o protocolo otimizado (System Instruction + History)
+                response_stream = gemini_client.generate_content(
+                    history_contents, # Somente o histórico limitado da conversa
+                    config={
+                        "temperature": 0.0,
+                        "timeout": 180, # Timeout para tolerar análises longas
+                        "system_instruction": st.session_state.specialist_prompt # Instrução como System Instruction
+                    },
+                    stream=True # Ativa o streaming para evitar timeout e melhorar UX
+                )
+                
+                # Exibe a resposta em streaming e constrói o texto completo
+                full_response_text = ""
+                response_placeholder = st.chat_message("assistant").empty()
+                
+                for chunk in response_stream:
+                    # Garantia contra valores nulos (chunks vazios)
+                    if chunk.text:
+                        full_response_text += chunk.text
+                        response_placeholder.markdown(full_response_text)
+                
+                # Adiciona a resposta completa ao histórico
+                st.session_state.chat_history_list.append({"role": "assistant", "content": full_response_text})
+
+                # Limpa e processa a resposta final (para extrair código/gráfico)
+                response_placeholder.empty()
+                parse_and_display_response(full_response_text)
+
+            except Exception as e:
+                st.session_state.chat_history_list.append({"role": "assistant", "content": "Ocorreu um erro na comunicação com a IA. Por favor, tente novamente ou reformule sua pergunta."})
+                st.chat_message("assistant").error("❌ Erro de comunicação ou timeout. Tente novamente.")
+                print(f"Erro na execução da API: {e}")
+
+# Footer
+if st.session_state.df is None:
+    st.info("⚠️ Carregue um arquivo CSV, ZIP ou GZ para iniciar a análise.")
