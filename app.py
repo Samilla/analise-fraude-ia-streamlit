@@ -9,11 +9,11 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents.agent_types import AgentType
 from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
 from langchain.memory import ConversationBufferWindowMemory
-from langchain.callbacks import get_openai_callback
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
 import hashlib
+import time
 
 # --- Configurações Iniciais do Streamlit ---
 st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e de Fraudes")
@@ -21,8 +21,8 @@ st.set_page_config(layout="wide", page_title="Multi Agente de Análise Fiscal e 
 # --- Constantes e Variáveis Globais ---
 pio.templates.default = "plotly_white"
 
-# CORREÇÃO 1: Modelo Gemini 2.5 Flash
-MODEL_NAME = "gemini-2.5-flash"  # Modelo mais recente
+# CORREÇÃO 1: Modelo Gemini estável (2.5-flash pode estar instável)
+MODEL_NAME = "gemini-1.5-flash"  # Modelo mais estável
 
 # Tenta obter a chave da API
 try:
@@ -308,16 +308,16 @@ IMPORTANTE: Execute o código E explique o resultado."""
             timeout=60
         )
         
-        # CORREÇÃO 6: Usa OpenAI Functions Agent para melhor parsing
+        # CORREÇÃO 6: Configuração otimizada para evitar timeout
         agent = create_pandas_dataframe_agent(
             llm=llm,
             df=_df,
             verbose=True,
-            agent_type=AgentType.OPENAI_FUNCTIONS,  # Melhor para Gemini 2.5
+            agent_type=AgentType.OPENAI_FUNCTIONS,
             prefix=analyst_prompt,
             allow_dangerous_code=True,
-            number_of_head_rows=3,  # Mostra apenas 3 linhas para economizar tokens
-            max_iterations=5,
+            number_of_head_rows=3,
+            max_iterations=8,  # Aumentado para análises mais complexas
             early_stopping_method="generate"
         )
         
@@ -400,9 +400,12 @@ if uploaded_file and st.session_state.df is None:
             st.success(f"✅ Arquivo '{uploaded_file.name}' carregado!")
             st.info(f"📊 Dataset: {df.shape[0]} linhas × {df.shape[1]} colunas")
             
+            # MENSAGEM INICIAL PARA O USUÁRIO
+            st.info('💡 **Para iniciar a conversa, faça a primeira pergunta: "Liste as colunas"**')
+            
             # Preview dos dados
             with st.expander("👀 Preview dos Dados"):
-                st.dataframe(df.head(10), use_container_width=True)
+                st.dataframe(df.head(10), width='stretch')
                 st.write("**Colunas:**", ", ".join(df.columns.tolist()))
 
 # --- Processamento do Relatório ---
@@ -448,34 +451,65 @@ if st.session_state.data_agent and st.session_state.df is not None:
         else:
             with st.spinner("🤖 Processando..."):
                 try:
-                    # CORREÇÃO: Execução simplificada
-                    response = st.session_state.data_agent.invoke({
-                        "input": prompt
-                    })
+                    # CORREÇÃO: Adiciona retry e delay para evitar erro 500
+                    max_retries = 2
+                    retry_count = 0
+                    response_text = None
                     
-                    # Extrai o output
-                    if isinstance(response, dict):
-                        response_text = response.get('output', str(response))
-                    else:
-                        response_text = str(response)
-                    
-                    # Limpa a resposta
-                    response_text = response_text.strip()
+                    while retry_count < max_retries and response_text is None:
+                        try:
+                            # Execução com retry
+                            response = st.session_state.data_agent.invoke({
+                                "input": prompt
+                            })
+                            
+                            # Extrai o output
+                            if isinstance(response, dict):
+                                response_text = response.get('output', str(response))
+                            else:
+                                response_text = str(response)
+                            
+                            # Limpa a resposta
+                            response_text = response_text.strip()
+                            
+                        except Exception as retry_error:
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                st.warning(f"⚠️ Tentativa {retry_count} falhou. Tentando novamente...")
+                                time.sleep(2)  # Aguarda 2 segundos antes de tentar novamente
+                            else:
+                                raise retry_error
                     
                     # Verifica se retornou código ao invés de resultado
-                    if response_text.startswith(('print(', 'df.', 'pd.')):
+                    if response_text and response_text.startswith(('print(', 'df.', 'pd.')):
                         response_text = "⚠️ O agente retornou código ao invés do resultado. Tente reformular a pergunta de forma mais específica."
                     
                     # Salva no cache apenas se for uma resposta válida
-                    if not response_text.startswith('⚠️'):
+                    if response_text and not response_text.startswith('⚠️'):
                         st.session_state.query_cache[query_hash] = response_text
                         st.session_state.api_calls_count += 1
                     
                 except Exception as e:
                     error_msg = str(e).lower()
                     
-                    # Mensagens de erro mais específicas
-                    if "parsing" in error_msg or "could not parse" in error_msg:
+                    # Mensagens de erro específicas e úteis
+                    if "500" in error_msg or "internal" in error_msg:
+                        response_text = """🔴 **Erro 500 - Servidor do Gemini sobrecarregado**
+                        
+**Possíveis causas:**
+1. API do Gemini está instável no momento
+2. Pergunta muito complexa para o modelo processar
+3. Limite de taxa da API atingido
+
+**Soluções:**
+✅ Aguarde 10-30 segundos e tente novamente
+✅ Simplifique sua pergunta
+✅ Tente: "Liste as colunas" primeiro
+✅ Verifique se sua API key está válida
+
+💡 **Dica:** O modelo `gemini-1.5-flash` é mais estável que o 2.5-flash."""
+                    
+                    elif "parsing" in error_msg or "could not parse" in error_msg:
                         response_text = """⚠️ **Erro de interpretação.**
                         
 Tente perguntas mais diretas como:
@@ -483,12 +517,21 @@ Tente perguntas mais diretas como:
 - "Conte as linhas"
 - "Exiba estatísticas básicas"
 """
-                    elif "timeout" in error_msg:
-                        response_text = "⏱️ Tempo esgotado. Tente uma pergunta mais simples."
+                    elif "timeout" in error_msg or "limite de iteração" in error_msg or "iteration" in error_msg:
+                        response_text = """⏱️ **Análise muito complexa - tempo/iterações excedidos.**
+                        
+**Solução:** Simplifique sua pergunta:
+- Ao invés de "Analise tudo", pergunte "Mostre estatísticas de Amount"
+- Divida em perguntas menores
+- Seja mais específico sobre qual coluna analisar
+
+**Dica:** Para análises complexas, faça perguntas incrementais."""
                     elif "rate limit" in error_msg or "quota" in error_msg:
                         response_text = "🚫 Limite de API atingido. Aguarde alguns segundos."
+                    elif "api key" in error_msg or "authentication" in error_msg:
+                        response_text = "🔑 Erro de autenticação. Verifique sua API Key do Gemini."
                     else:
-                        response_text = f"⚠️ Erro: {str(e)[:150]}"
+                        response_text = f"⚠️ Erro: {str(e)[:200]}"
                     
                     st.error(response_text)
         
@@ -504,7 +547,7 @@ Tente perguntas mais diretas como:
             chart = create_chart_from_query(st.session_state.df, prompt, chart_type)
             
             if chart:
-                st.plotly_chart(chart, use_container_width=True)
+                st.plotly_chart(chart, width='stretch')
                 st.success("✅ Gráfico gerado com sucesso!")
             else:
                 st.warning("⚠️ Não foi possível gerar o gráfico. Tente especificar as colunas na sua pergunta.")
