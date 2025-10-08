@@ -52,12 +52,10 @@ def get_llm():
     if not API_KEY:
         return None
     try:
-        # Usa o LLM do LangChain que suporta Tool Calling
+        # LLM é criado sem o parâmetro obsoleto 'client_options'
         llm = ChatGoogleGenerativeAI(
             model=MODEL_NAME, 
-            temperature=0.0,
-            # Configuração otimizada para estabilidade e timeout
-            client_options={"request_options": {"timeout": 180}}
+            temperature=0.0
         )
         return llm
     except Exception as e:
@@ -131,7 +129,7 @@ def generate_plotly_plot(column: str, plot_type: str) -> str:
     except Exception as e:
         return f"Erro ao gerar gráfico Plotly para a coluna {column}: {e}"
 
-# Lista de todas as ferramentas disponíveis
+# Lista de todas as ferramentas disponíveis (acesso global)
 tools = [describe_dataframe, calculate_statistics, generate_plotly_plot]
 
 # --- Funções de Manipulação de Arquivos ---
@@ -146,8 +144,7 @@ def unzip_and_read_file(uploaded_file):
         tmp_csv_path = tmp_file.name
 
     try:
-        # Lógica de descompactação (mantida do código anterior)
-        # [Conteúdo da lógica de descompactação...]
+        # Lógica de descompactação
         if file_extension == 'zip':
             with zipfile.ZipFile(uploaded_file, 'r') as zf:
                 csv_files = [name for name in zf.namelist() if name.endswith('.csv')]
@@ -194,11 +191,12 @@ def get_execution_df_cached(temp_csv_path):
         
     return df, is_sampled, original_rows
 
-# --- Inicialização do Agente ---
+# --- Inicialização do Agente (Corrigido para Caching) ---
 
 @st.cache_resource
-def get_agent_executor(llm, tools):
+def get_agent_executor():
     """Cria e armazena o Agente Executor na cache."""
+    llm = get_llm() # Chama o LLM cacheado
     if llm is None:
         return None
 
@@ -294,7 +292,8 @@ if 'agent_executor' not in st.session_state: st.session_state.agent_executor = N
 
 # Inicializa o executor do Agente
 if 'agent_executor' not in st.session_state or st.session_state.agent_executor is None:
-    st.session_state.agent_executor = get_agent_executor(get_llm(), tools)
+    # Chama a função sem parâmetros, resolvendo o erro de cache
+    st.session_state.agent_executor = get_agent_executor()
 
 # --- Barra Lateral (Upload e Relatório) ---
 with st.sidebar:
@@ -326,11 +325,8 @@ if uploaded_file and st.session_state.temp_csv_path is None:
     
     if st.session_state.df is not None:
         # Passo 2: Lê o DataFrame cacheado (amostrado) para a execução do Agente
+        # O resultado é salvo em df_exec, que é o que as tools usam
         st.session_state.df_exec, is_sampled, original_rows = get_execution_df_cached(st.session_state.temp_csv_path) 
-        
-        # Injeta o DataFrame cacheado no estado de sessão para acesso pelas Tools
-        # Isso é CRUCIAL para as ferramentas (tools)
-        st.session_state.df_exec = st.session_state.df_exec 
         
         st.session_state.chat_history_list.clear()
         st.success(f"Arquivo '{uploaded_file.name}' carregado e pronto para análise!")
