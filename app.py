@@ -322,43 +322,38 @@ def create_smart_chart(df: pd.DataFrame, query: str, chart_type: str = 'auto'):
 def create_agent(_df: pd.DataFrame):
     """Cria agente com configurações otimizadas"""
     
-    system_prompt = """Você é um analista de dados Python especializado em análises fiscais.
+    system_prompt = """Você é um assistente Python para análise de dados.
 
-REGRAS CRÍTICAS:
-1. SEMPRE execute código Python para responder
-2. Use 'df' como nome do DataFrame
-3. Seja EXTREMAMENTE conciso - máximo 3-4 linhas de resposta
-4. NUNCA explique o código, apenas mostre o resultado
-5. Para perguntas simples, retorne APENAS o número/valor
+INSTRUÇÕES:
+- Use o DataFrame 'df' para responder
+- Execute código Python quando necessário
+- Seja conciso e direto
+- Retorne apenas o resultado final
 
-Exemplos de respostas corretas:
-- "O dataset tem 10.000 linhas"
-- "A média é 1.234,56"
-- "As top 5 categorias são: A (500), B (300), C (200), D (150), E (100)"
-
-EXECUTE o código, não apenas mostre ele."""
+Exemplo:
+Pergunta: "Quantas linhas tem o dataset?"
+Resposta: "O dataset tem 10.000 linhas"
+"""
 
     try:
         llm = ChatGoogleGenerativeAI(
             model=MODEL_NAME,
             google_api_key=API_KEY,
-            temperature=0,
+            temperature=0.1,
             max_output_tokens=MAX_TOKENS,
-            timeout=30
-            # REMOVIDO: convert_system_message_to_human (deprecated)
+            timeout=60
         )
         
         agent = create_pandas_dataframe_agent(
             llm=llm,
             df=_df,
-            verbose=False,
+            verbose=True,  # ATIVADO para debug
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
             prefix=system_prompt,
             allow_dangerous_code=True,
-            max_iterations=3,
-            max_execution_time=25,
-            early_stopping_method="generate",
-            # REMOVIDO: handle_parsing_errors (não suportado pelo invoke)
+            max_iterations=5,  # Aumentado
+            max_execution_time=45,  # Aumentado
+            handle_parsing_errors=True  # REATIVADO - necessário para tratar erros
         )
         
         return agent
