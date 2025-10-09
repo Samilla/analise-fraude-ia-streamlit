@@ -14,7 +14,7 @@ Sistema inteligente de análise de dados fiscais com IA, otimizado para detecç�
 🚀 Instalação
 Pré-requisitos
 
-Python 3.8 ou superior
+Python 3.12 ou superior
 Chave de API do Google Gemini (obtenha aqui)
 
 Passo a Passo
@@ -69,15 +69,15 @@ O sistema carrega e processa automaticamente
 2. Análise Conversacional
 Faça perguntas em linguagem natural:
 "Quantas linhas tem o dataset?"
-"Qual o valor total das notas fiscais?"
+"Qual o valor total da coluna x?
 "Mostre a distribuição dos valores"
-"Gráfico de barras das top 10 categorias"
-"Identifique valores atípicos na coluna Valor"
+"Gráfico de barras da média da coluna x e y"
+"Identifique valores atípicos na coluna x"
 
  3. Geração Automática de Gráficos
 O sistema detecta automaticamente quando criar visualizações:
 
-Gráfico de Barras: "mostre em barras", "top 10 categorias"
+Gráfico de Barras: "mostre em barras", "média da coluna x e y"
 Gráfico de Linha: "evolução temporal", "tendência ao longo do tempo"
 Dispersão: "correlação entre X e Y", "relação entre variáveis"
 Pizza: "proporção", "distribuição percentual"
@@ -105,9 +105,10 @@ Análise Fiscal
 python# Análise de notas fiscais
 •	Quais são as colunas do dataset?
 •	Quantas linhas e colunas existem?
-•	Quais são os tipos de dados numéricos e ou categóricos?
-•	Quais as medidas de tendência central (média, mediana, moda)?
-•	Qual a variabilidade dos dados (desvio padrão, variância)?
+•	Quais são os tipos de dados numéricos e categóricos?
+•	Quais as medidas de tendência central (média)?
+•	Quais as medidas de tendência central (moda)?
+•	Qual a variabilidade dos dados (desvio padrão)?
 
 Detecção de Fraudes
 python# Identificação de anomalias
