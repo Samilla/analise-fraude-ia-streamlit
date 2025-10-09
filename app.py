@@ -525,7 +525,7 @@ if uploaded_file:
                         st.metric("💾 Memória", f"{df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
                     
                     with st.expander("👀 Preview dos Dados", expanded=False):
-                        st.dataframe(df.head(20), width=None)  # CORRIGIDO: width=None ao invés de use_container_width
+                        st.dataframe(df.head(20))  # Sem parâmetro width = comportamento padrão
                         
                         st.markdown("**📋 Tipos de Dados:**")
                         type_counts = df.dtypes.value_counts()
