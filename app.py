@@ -322,17 +322,27 @@ def create_smart_chart(df: pd.DataFrame, query: str, chart_type: str = 'auto'):
 def create_agent(_df: pd.DataFrame):
     """Cria agente com configurações otimizadas"""
     
-    system_prompt = """Você é um assistente Python para análise de dados.
+    # Prompt mais direto e efetivo
+    system_prompt = """Você é um assistente de análise de dados especializado em Python e Pandas.
 
-INSTRUÇÕES:
-- Use o DataFrame 'df' para responder
-- Execute código Python quando necessário
-- Seja conciso e direto
-- Retorne apenas o resultado final
+INSTRUÇÕES IMPORTANTES:
+1. Sempre use o DataFrame chamado 'df'
+2. Execute código Python para responder
+3. Forneça respostas curtas e diretas (máximo 3-4 linhas)
+4. Se executar código, mostre o resultado de forma clara
+5. Para perguntas sobre colunas, use: df.columns.tolist()
+6. Para contagem, use: len(df)
+7. Para estatísticas, use: df.describe()
+
+Formato da resposta:
+- Responda em linguagem natural
+- Seja objetivo e conciso
+- Se mostrar números, formate-os claramente
 
 Exemplo:
 Pergunta: "Quantas linhas tem o dataset?"
-Resposta: "O dataset tem 10.000 linhas"
+Ação: python_repl_ast: len(df)
+Resposta: "O dataset contém 10.000 linhas."
 """
 
     try:
@@ -341,19 +351,21 @@ Resposta: "O dataset tem 10.000 linhas"
             google_api_key=API_KEY,
             temperature=0.1,
             max_output_tokens=MAX_TOKENS,
-            timeout=60
+            timeout=60,
+            top_p=0.95
         )
         
+        # Configuração sem handle_parsing_errors
         agent = create_pandas_dataframe_agent(
             llm=llm,
             df=_df,
-            verbose=True,  # ATIVADO para debug
+            verbose=True,
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
             prefix=system_prompt,
             allow_dangerous_code=True,
-            max_iterations=5,  # Aumentado
-            max_execution_time=45,  # Aumentado
-            handle_parsing_errors=True  # REATIVADO - necessário para tratar erros
+            max_iterations=5,
+            max_execution_time=60,
+            # NÃO usar handle_parsing_errors aqui - será tratado no invoke
         )
         
         return agent
@@ -441,13 +453,15 @@ with st.sidebar:
 Seja EXTREMAMENTE conciso. Use números."""
                     
                     try:
-                        # CORRIGIDO: Sem handle_parsing_errors no invoke
+                        # Invoke com input no formato correto
                         response = st.session_state.agent.invoke({"input": report_query})
-                        st.session_state.report = response.get('output', str(response))
+                        st.session_state.report = response.get('output', response.get('result', str(response)))
                         record_api_call()
                         st.success("✅ Relatório gerado!")
                     except Exception as e:
-                        st.error(f"❌ Erro: {str(e)[:100]}")
+                        st.error(f"❌ Erro: {str(e)[:200]}")
+                        with st.expander("🔍 Detalhes do erro"):
+                            st.code(str(e))
     
     if st.session_state.report:
         st.download_button(
@@ -570,13 +584,20 @@ if st.session_state.agent and st.session_state.df is not None:
             with st.chat_message("assistant"):
                 with st.spinner("🤔 Analisando..."):
                     try:
-                        # CORRIGIDO: Invoke simplificado
-                        result = st.session_state.agent.invoke({"input": user_query})
+                        # Invoke com tratamento adequado
+                        result = st.session_state.agent.invoke(user_query)
                         
-                        response_text = result.get('output', str(result)).strip()
+                        # Extrai resposta de diferentes formatos possíveis
+                        if isinstance(result, dict):
+                            response_text = result.get('output', result.get('result', str(result)))
+                        else:
+                            response_text = str(result)
                         
-                        if len(response_text) > 500:
-                            response_text = response_text[:500] + "..."
+                        response_text = response_text.strip()
+                        
+                        # Limita tamanho se muito grande
+                        if len(response_text) > 800:
+                            response_text = response_text[:800] + "..."
                         
                         st.markdown(response_text)
                         
@@ -587,15 +608,22 @@ if st.session_state.agent and st.session_state.df is not None:
                         st.caption(f"🔥 ~{approx_tokens} tokens usados")
                         
                     except Exception as e:
-                        error_msg = str(e)
-                        if "timeout" in error_msg.lower():
+                        error_msg = str(e).lower()
+                        
+                        # Debug: mostra erro completo em expander
+                        with st.expander("🔍 Ver detalhes do erro"):
+                            st.code(str(e))
+                        
+                        if "timeout" in error_msg:
                             response_text = "⏱️ A consulta demorou muito. Tente uma pergunta mais simples."
-                        elif "parsing" in error_msg.lower():
-                            response_text = "⚠️ Erro ao interpretar resposta. Reformule sua pergunta de forma mais direta."
-                        elif "quota" in error_msg.lower() or "limit" in error_msg.lower():
-                            response_text = "🚫 Limite da API Gemini atingido. Tente novamente mais tarde."
+                        elif "parsing" in error_msg or "could not parse" in error_msg:
+                            response_text = "⚠️ Erro ao processar. Tente reformular: 'Mostre as primeiras 5 linhas do dataset'"
+                        elif "quota" in error_msg or "limit" in error_msg:
+                            response_text = "🚫 Limite da API atingido. Aguarde alguns minutos."
+                        elif "api" in error_msg or "key" in error_msg:
+                            response_text = "🔑 Erro na API Key. Verifique se está configurada corretamente."
                         else:
-                            response_text = f"❌ Erro: {error_msg[:200]}"
+                            response_text = f"❌ Erro inesperado. Tente: 'Quantas linhas tem o dataset?'"
                         
                         st.error(response_text)
         
