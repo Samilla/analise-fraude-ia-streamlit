@@ -20,11 +20,12 @@ st.set_page_config(
 )
 
 # --- Constantes ---
-MODEL_NAME = "gemini-2.0-flash-exp"  # Modelo mais econômico e rápido
-MAX_TOKENS = 1024  # Limite de tokens por resposta
-CACHE_TTL = 3600  # 1 hora de cache
-MAX_DAILY_CALLS = 100  # Limite diário de chamadas API
-MIN_CALL_INTERVAL = 2  # Segundos mínimos entre chamadas (rate limiting)
+MODEL_NAME = "gemini-2.0-flash-exp"
+MAX_TOKENS = 1024
+CACHE_TTL = 3600
+MAX_DAILY_CALLS = 100
+MIN_CALL_INTERVAL = 2
+MAX_HISTORY_SIZE = 10  # NOVO: Limita histórico para economizar tokens
 
 # Tenta obter a chave da API
 try:
@@ -79,7 +80,6 @@ def check_rate_limit() -> bool:
 
 def check_daily_limit() -> bool:
     """Verifica se atingiu limite diário"""
-    # Reseta contador se mudou o dia
     today = datetime.now().strftime('%Y-%m-%d')
     
     if 'call_date' not in st.session_state or st.session_state.call_date != today:
@@ -132,7 +132,6 @@ def should_create_chart(query: str) -> tuple:
     """Detecta se deve gerar gráfico e qual tipo"""
     query_lower = query.lower()
     
-    # Palavras que indicam gráfico
     chart_triggers = {
         'bar': ['gráfico de barras', 'grafico de barras', 'gráfico de barra', 'chart bar', 
                 'plote as', 'plote os', 'mostre em barras', 'visualize', 'visualização'],
@@ -144,12 +143,10 @@ def should_create_chart(query: str) -> tuple:
         'box': ['boxplot', 'box plot', 'outliers', 'quartis']
     }
     
-    # Verifica se é uma solicitação de gráfico explícita
     for chart_type, triggers in chart_triggers.items():
         if any(trigger in query_lower for trigger in triggers):
             return True, chart_type
     
-    # Palavras genéricas que indicam visualização
     if any(word in query_lower for word in ['gráfico', 'grafico', 'plot', 'plote', 'chart', 
                                               'visualiz', 'mostre graficamente', 'desenhe']):
         return True, 'auto'
@@ -161,12 +158,10 @@ def extract_columns_from_query(query: str, df: pd.DataFrame) -> list:
     query_lower = query.lower()
     columns_found = []
     
-    # Procura por colunas exatas
     for col in df.columns:
         if col.lower() in query_lower:
             columns_found.append(col)
     
-    # Procura por padrões tipo "coluna X" ou "campo X"
     words = query_lower.split()
     for i, word in enumerate(words):
         if word in ['coluna', 'campo', 'variável', 'variavel'] and i + 1 < len(words):
@@ -175,20 +170,17 @@ def extract_columns_from_query(query: str, df: pd.DataFrame) -> list:
                 if potential_col in col.lower():
                     columns_found.append(col)
     
-    return list(set(columns_found))  # Remove duplicatas
+    return list(set(columns_found))
 
 def create_smart_chart(df: pd.DataFrame, query: str, chart_type: str = 'auto'):
     """Cria gráficos inteligentemente baseado no contexto"""
     try:
-        # Limita dados para performance
         df_sample = df.head(5000)
         
-        # Identifica colunas
         mentioned_cols = extract_columns_from_query(query, df)
         numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
         categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
         
-        # Auto-detecta melhor tipo de gráfico
         if chart_type == 'auto':
             if len(mentioned_cols) >= 2:
                 if all(col in numeric_cols for col in mentioned_cols[:2]):
@@ -330,7 +322,6 @@ def create_smart_chart(df: pd.DataFrame, query: str, chart_type: str = 'auto'):
 def create_agent(_df: pd.DataFrame):
     """Cria agente com configurações otimizadas"""
     
-    # Prompt otimizado e direto
     system_prompt = """Você é um analista de dados Python especializado em análises fiscais.
 
 REGRAS CRÍTICAS:
@@ -351,23 +342,23 @@ EXECUTE o código, não apenas mostre ele."""
         llm = ChatGoogleGenerativeAI(
             model=MODEL_NAME,
             google_api_key=API_KEY,
-            temperature=0,  # Zero temperatura = respostas determinísticas
-            max_output_tokens=MAX_TOKENS,  # Limita tokens
-            timeout=30,  # Timeout reduzido
-            convert_system_message_to_human=True  # Compatibilidade Gemini
+            temperature=0,
+            max_output_tokens=MAX_TOKENS,
+            timeout=30
+            # REMOVIDO: convert_system_message_to_human (deprecated)
         )
         
         agent = create_pandas_dataframe_agent(
             llm=llm,
             df=_df,
-            verbose=False,  # Reduz output desnecessário
+            verbose=False,
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
             prefix=system_prompt,
             allow_dangerous_code=True,
-            max_iterations=3,  # Reduzido de 4 para 3
+            max_iterations=3,
             max_execution_time=25,
-            early_stopping_method="generate",  # Para mais rápido
-            handle_parsing_errors=True
+            early_stopping_method="generate",
+            # REMOVIDO: handle_parsing_errors (não suportado pelo invoke)
         )
         
         return agent
@@ -417,11 +408,9 @@ with st.sidebar:
         economia = (st.session_state.cache_hits / total_queries) * 100
         st.success(f"💰 Economia: {economia:.1f}%")
         
-        # Barra de progresso do limite diário
         progress = st.session_state.api_calls / MAX_DAILY_CALLS
         st.progress(progress, text=f"Limite diário: {progress*100:.0f}%")
         
-        # Alerta se próximo do limite
         if st.session_state.api_calls >= MAX_DAILY_CALLS * 0.8:
             st.warning(f"⚠️ Você usou {st.session_state.api_calls} de {MAX_DAILY_CALLS} chamadas")
     
@@ -440,12 +429,11 @@ with st.sidebar:
     st.subheader("📊 Relatório")
     if st.button("🔄 Gerar Relatório", use_container_width=True):
         if st.session_state.agent:
-            # Verifica limite diário
             if not check_daily_limit():
                 st.error(f"❌ Limite diário de {MAX_DAILY_CALLS} chamadas atingido!")
                 st.info("💡 O contador será resetado amanhã ou limpe o cache.")
             else:
-                check_rate_limit()  # Rate limiting
+                check_rate_limit()
                 
                 with st.spinner("Gerando relatório..."):
                     report_query = """Gere um relatório executivo com exatamente 5 tópicos:
@@ -458,6 +446,7 @@ with st.sidebar:
 Seja EXTREMAMENTE conciso. Use números."""
                     
                     try:
+                        # CORRIGIDO: Sem handle_parsing_errors no invoke
                         response = st.session_state.agent.invoke({"input": report_query})
                         st.session_state.report = response.get('output', str(response))
                         record_api_call()
@@ -497,8 +486,8 @@ Seja EXTREMAMENTE conciso. Use números."""
         st.info(f"**Rate Limit:** {MIN_CALL_INTERVAL}s entre chamadas")
         st.info(f"**Cache TTL:** {CACHE_TTL/3600:.0f} hora(s)")
         st.info(f"**Max Tokens:** {MAX_TOKENS}")
+        st.info(f"**Histórico Máx:** {MAX_HISTORY_SIZE} mensagens")
         
-        # Opção de exportar histórico
         if st.session_state.chat_history:
             chat_export = "\n\n".join([
                 f"**{'Você' if role=='user' else 'Agente'}:** {msg}"
@@ -536,7 +525,7 @@ if uploaded_file:
                         st.metric("💾 Memória", f"{df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
                     
                     with st.expander("👀 Preview dos Dados", expanded=False):
-                        st.dataframe(df.head(20), use_container_width=True)
+                        st.dataframe(df.head(20), width=None)  # CORRIGIDO: width=None ao invés de use_container_width
                         
                         st.markdown("**📋 Tipos de Dados:**")
                         type_counts = df.dtypes.value_counts()
@@ -546,22 +535,26 @@ if uploaded_file:
 # --- Chat Interface ---
 if st.session_state.agent and st.session_state.df is not None:
     
-    # Exibe histórico
-    for role, message in st.session_state.chat_history:
+    # NOVO: Limita histórico exibido para economizar tokens
+    display_history = st.session_state.chat_history[-MAX_HISTORY_SIZE:] if len(st.session_state.chat_history) > MAX_HISTORY_SIZE else st.session_state.chat_history
+    
+    for role, message in display_history:
         with st.chat_message(role):
             st.markdown(message)
+    
+    # Aviso se histórico foi truncado
+    if len(st.session_state.chat_history) > MAX_HISTORY_SIZE:
+        st.info(f"💡 Exibindo últimas {MAX_HISTORY_SIZE} mensagens (total: {len(st.session_state.chat_history)})")
     
     # Input do usuário
     if user_query := st.chat_input("💬 Faça sua pergunta sobre os dados..."):
         
-        # Verifica limite diário ANTES de processar
         if not check_daily_limit():
             st.error(f"❌ **Limite diário atingido!**")
             st.warning(f"Você já usou {MAX_DAILY_CALLS} chamadas hoje. O contador será resetado amanhã às 00:00.")
             st.info("💡 **Dica:** Use o cache! Refaça perguntas anteriores para economizar.")
             st.stop()
         
-        # Adiciona ao histórico
         st.session_state.chat_history.append(("user", user_query))
         with st.chat_message("user"):
             st.markdown(user_query)
@@ -577,31 +570,24 @@ if st.session_state.agent and st.session_state.df is not None:
                 st.markdown(response_text)
                 st.caption("💾 Resposta do cache (0 tokens gastos)")
         else:
-            # Aplica rate limiting
             check_rate_limit()
             
             with st.chat_message("assistant"):
                 with st.spinner("🤔 Analisando..."):
                     try:
-                        # Consulta o agente
-                        result = st.session_state.agent.invoke({
-                            "input": user_query,
-                            "handle_parsing_errors": True
-                        })
+                        # CORRIGIDO: Invoke simplificado
+                        result = st.session_state.agent.invoke({"input": user_query})
                         
                         response_text = result.get('output', str(result)).strip()
                         
-                        # Limpa resposta se muito verbosa
                         if len(response_text) > 500:
                             response_text = response_text[:500] + "..."
                         
                         st.markdown(response_text)
                         
-                        # Salva no cache
                         save_to_cache(cache_key, response_text)
                         record_api_call()
                         
-                        # Mostra tokens gastos aproximados
                         approx_tokens = len(user_query.split()) + len(response_text.split())
                         st.caption(f"🔥 ~{approx_tokens} tokens usados")
                         
@@ -618,8 +604,11 @@ if st.session_state.agent and st.session_state.df is not None:
                         
                         st.error(response_text)
         
-        # Adiciona resposta ao histórico
         st.session_state.chat_history.append(("assistant", response_text))
+        
+        # Limita tamanho do histórico em memória
+        if len(st.session_state.chat_history) > MAX_HISTORY_SIZE * 2:
+            st.session_state.chat_history = st.session_state.chat_history[-MAX_HISTORY_SIZE:]
         
         # Detecta e gera gráfico
         should_chart, chart_type = should_create_chart(user_query)
@@ -629,18 +618,17 @@ if st.session_state.agent and st.session_state.df is not None:
                 chart = create_smart_chart(st.session_state.df, user_query, chart_type)
                 
                 if chart:
+                    # CORRIGIDO: use_container_width=True funciona aqui
                     st.plotly_chart(chart, use_container_width=True, key=f"chart_{len(st.session_state.chat_history)}")
                     st.success("✅ Gráfico gerado!")
                 else:
                     st.info("💡 Especifique as colunas para gerar o gráfico (ex: 'gráfico de barras da coluna Status')")
 
 else:
-    # Mensagem inicial
     st.info("👆 **Carregue um arquivo CSV, ZIP ou GZ na barra lateral para começar**")
     
     st.markdown("### 💡 Exemplos de Análises Fiscais:")
     
-    # Organiza exemplos por categoria
     col1, col2 = st.columns(2)
     
     with col1:
@@ -722,7 +710,7 @@ else:
         """)
     
     st.markdown("---")
-    st.info("💡 **Dica:** Após carregar seus dados, use o botão '🎯 Análise Rápida' na sidebar para um diagnóstico automático!")
+    st.info("💡 **Dica:** Após carregar seus dados, use o botão '🔄 Gerar Relatório' na sidebar para um diagnóstico automático!")
 
 # --- Footer ---
 st.markdown("---")
