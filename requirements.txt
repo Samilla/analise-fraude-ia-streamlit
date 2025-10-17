@@ -3,8 +3,14 @@ pandas
 plotly
 langchain
 langchain-community
-google-generativeai
 langchain-google-genai
 langchain-experimental
+langchain-core
+google-generativeai
+pydantic
+tenacity
 tabulate
 seaborn
+
+
+
